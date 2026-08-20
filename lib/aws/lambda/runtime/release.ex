@@ -14,19 +14,17 @@ defmodule AWS.Lambda.Runtime.Release do
 
   ## Public functions
 
-  def lambda do
+  def lambda(opts \\ []) do
     [
       include_erts: false,
       include_executables_for: [:unix],
       strip_beams: true,
       quiet: true,
-      steps: [
-        &strip_iex/1,
-        :assemble,
-        &copy_bootstrap/1,
-        &copy_release_files/1
-      ]
+      steps: [:assemble, &copy_bootstrap/1, &copy_release_files/1]
     ]
+    |> maybe_strip_iex(opts)
+    |> maybe_before_steps(opts)
+    |> maybe_after_steps(opts)
   end
 
   def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
@@ -87,5 +85,33 @@ defmodule AWS.Lambda.Runtime.Release do
 
   defp priv_path(path) do
     Application.app_dir(:aws_lambda_runtime, path)
+  end
+
+  defp maybe_strip_iex(release, opts) do
+    if Keyword.get(opts, :strip_iex) == true do
+      Keyword.update!(release, :steps, &[(&strip_iex/1) | &1])
+    else
+      release
+    end
+  end
+
+  defp maybe_before_steps(release, opts) do
+    before_steps = Keyword.get(opts, :before_steps)
+
+    if is_list(before_steps) do
+      Keyword.update!(release, :steps, &(before_steps ++ &1))
+    else
+      release
+    end
+  end
+
+  defp maybe_after_steps(release, opts) do
+    after_steps = Keyword.get(opts, :after_steps)
+
+    if is_list(after_steps) do
+      Keyword.update!(release, :steps, &(&1 ++ after_steps))
+    else
+      release
+    end
   end
 end
