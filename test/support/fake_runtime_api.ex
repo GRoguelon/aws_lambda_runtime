@@ -78,6 +78,13 @@ defmodule Support.FakeRuntimeAPI do
       nil ->
         ""
 
+      "0" ->
+        # `:gen_tcp.recv(socket, 0)` doesn't mean "read zero bytes": it means
+        # "read whatever is available, blocking until something arrives" -
+        # which never happens for a bodyless request. OTP 27's httpc sends
+        # this header on GETs (OTP 28+ doesn't), so this case is reachable.
+        ""
+
       length ->
         {:ok, body} = :gen_tcp.recv(socket, String.to_integer(length))
         body
