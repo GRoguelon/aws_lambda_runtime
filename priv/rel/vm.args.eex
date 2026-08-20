@@ -1,0 +1,20 @@
+## VM flags tuned for the Lambda execution environment.
+
+## Lambda throttles and freezes the CPU between invocations. Scheduler busy
+## waiting burns billed CPU while waiting on the Runtime API, so turn it off.
++sbwt none
++sbwtdcpu none
++sbwtdio none
++swt very_low
+
+## The VM sees the host's core count, not the cgroup CPU share. Lambda gives
+## roughly one vCPU per 1769 MB of memory, so pin the schedulers rather than
+## oversubscribing. Raise these if you configure a lot of memory.
++S 2:2
++SDio 2
+
+## Nothing to connect to, and no epmd running in the sandbox.
+-start_epmd false
+
+## Slightly smaller initial process heaps: most Lambda handlers are short lived.
++hms 1024

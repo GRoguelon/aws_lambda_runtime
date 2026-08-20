@@ -1,0 +1,26 @@
+#!/bin/sh
+# Lambda executes this file (mode 0755, at the root of the package) as the
+# entrypoint of a `provided.al2023` function.
+set -e
+
+# The ERTS layer is unpacked at /opt. The release was built with
+# `include_erts: false`, so the boot script picks up `erl` from PATH.
+export PATH="/opt/otp/bin:$PATH"
+
+# /var/task and /opt are read only; /tmp is the only writable location. The
+# release start script materialises sys.config and vm.args under RELEASE_TMP.
+export RELEASE_TMP=/tmp
+export HOME=/tmp
+
+# No epmd, no node name, no distribution — nothing to connect to and it costs
+# startup time.
+export RELEASE_DISTRIBUTION=none
+
+# A crash dump would try to write to a read-only filesystem and stall shutdown.
+export ERL_CRASH_DUMP=/dev/null
+export ERL_CRASH_DUMP_SECONDS=0
+
+export ELIXIR_ERL_OPTIONS="-noinput"
+
+# exec so the VM becomes the process Lambda supervises and receives its signals.
+exec "${LAMBDA_TASK_ROOT:-/var/task}/bin/lambda" start
