@@ -17,7 +17,8 @@ defmodule Mix.Tasks.AwsLambda.Build do
     1. Pulls the `ghcr.io/groguelon/lambda-layer-elixir:<elixir>-erlang-<erlang>-arm64`
        image, erroring out if no image matches the given versions.
     2. Creates a container from that image.
-    3. Installs `tar` in the container (the image doesn't ship with it).
+    3. Installs `tar` (and any `--dep` packages) in the container via `dnf`
+       (the image doesn't ship with `tar`).
     4. Copies this app's source into it.
     5. Runs `mix deps.get` and `mix release` inside the container (fetching
        `:aws_lambda_runtime` and any other declared deps).
@@ -32,6 +33,9 @@ defmodule Mix.Tasks.AwsLambda.Build do
     * `--output` / `-o` - where to write the zip on the host. Defaults to
       `_build/<release>.zip`.
     * `--platform` - Docker platform to run for. Defaults to `linux/arm64`.
+    * `--dep` / `-d` - extra `dnf` package to install in the container
+      alongside `tar` (e.g. because a dep needs `git` to fetch). May be
+      given multiple times.
   """
 
   ## Module attributes
@@ -49,9 +53,10 @@ defmodule Mix.Tasks.AwsLambda.Build do
         strict: [
           release: :string,
           output: :string,
-          platform: :string
+          platform: :string,
+          dep: [:string, :keep]
         ],
-        aliases: [r: :release, o: :output]
+        aliases: [r: :release, o: :output, d: :dep]
       )
 
     {erlang_version, elixir_version} =
@@ -76,39 +81,42 @@ defmodule Mix.Tasks.AwsLambda.Build do
     platform = opts[:platform] || @default_platform
     image = "#{@image_prefix}:#{elixir_version}-erlang-#{erlang_version}-arm64"
     output = Path.expand(opts[:output] || Path.join("_build", "#{release}.zip"), app_root)
+    dnf_packages = ["tar" | Keyword.get_values(opts, :dep)]
 
     container = "#{app_name}-lambda-build-#{System.unique_integer([:positive])}"
 
-    Mix.shell().info("==> Pulling builder image (#{image})")
+    step("==> Pulling builder image (#{image})")
     pull_image!(image, platform)
 
-    Mix.shell().info("==> Creating container #{container}")
+    step("==> Creating container #{container}")
     create_container!(container, image, platform)
 
     try do
-      Mix.shell().info("==> Installing tar in container")
-      install_tar!(container)
+      step("==> Installing #{Enum.join(dnf_packages, ", ")} in container")
+      install_dnf_packages!(container, dnf_packages)
 
-      Mix.shell().info("==> Copying source into container")
+      step("==> Copying source into container")
       copy_source!(container, app_root)
 
-      Mix.shell().info("==> Packaging release (mix release #{release})")
+      step("==> Packaging release (mix release #{release})")
       package_release!(container, app_name, release)
 
-      Mix.shell().info("==> Zipping build")
+      step("==> Zipping build")
       zip_release!(container, app_name, release)
 
-      Mix.shell().info("==> Downloading build")
+      step("==> Downloading build")
       download_zip!(container, output)
 
       Mix.shell().info([:green, "==> wrote #{output}"])
     after
-      Mix.shell().info("==> Removing container")
+      step("==> Removing container")
       docker(["rm", "-f", container])
     end
   end
 
   ## Private functions
+
+  defp step(message), do: Mix.shell().info([:magenta, message])
 
   defp default_release do
     case Mix.Project.config()[:releases] do
@@ -149,18 +157,20 @@ defmodule Mix.Tasks.AwsLambda.Build do
 
   # The lambda-layer-elixir image is trimmed down to the Lambda runtime
   # deps (ca-certificates, ncurses-libs, unixODBC) and doesn't ship `tar`,
-  # which we need to get the source into the container.
-  defp install_tar!(container) do
-    docker!([
-      "exec",
-      container,
-      "dnf",
-      "-y",
-      "--setopt=install_weak_deps=0",
-      "--nodocs",
-      "install",
-      "tar"
-    ])
+  # which we need to get the source into the container. `--dep` adds more
+  # packages here, e.g. `git` for deps fetched over git.
+  defp install_dnf_packages!(container, packages) do
+    docker!(
+      [
+        "exec",
+        container,
+        "dnf",
+        "-y",
+        "--setopt=install_weak_deps=0",
+        "--nodocs",
+        "install"
+      ] ++ packages
+    )
   end
 
   # Tars the app directory on the host, excluding local build artifacts, then
