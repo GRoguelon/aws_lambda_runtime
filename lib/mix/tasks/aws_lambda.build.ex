@@ -81,7 +81,7 @@ defmodule Mix.Tasks.AwsLambda.Build do
     platform = opts[:platform] || @default_platform
     image = "#{@image_prefix}:#{elixir_version}-erlang-#{erlang_version}-arm64"
     output = Path.expand(opts[:output] || Path.join("_build", "#{release}.zip"), app_root)
-    dnf_packages = ["tar" | Keyword.get_values(opts, :dep)]
+    dnf_packages = ["tar", "zip" | Keyword.get_values(opts, :dep)]
 
     container = "#{app_name}-lambda-build-#{System.unique_integer([:positive])}"
 
