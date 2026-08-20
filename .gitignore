@@ -24,3 +24,6 @@ aws_lambda_runtime-*.tar
 
 # Ignore Claude files
 .claude/
+
+# Ignore out files
+/out

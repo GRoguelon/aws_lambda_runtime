@@ -1,0 +1,8 @@
+# Ignore Git files
+.gitignore
+
+# Ignore Make files
+Makefile
+
+# Ignore build files
+*.zip
