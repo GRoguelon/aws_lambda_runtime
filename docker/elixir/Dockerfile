@@ -51,4 +51,10 @@ LABEL org.opencontainers.image.description="Elixir toolchain on top of the lambd
 ENV MIX_HOME=/usr/local/lib/elixir/.mix \
     HEX_HOME=/usr/local/lib/elixir/.hex
 
+RUN dnf -y upgrade && \
+    dnf -y --setopt=install_weak_deps=0 --nodocs install \
+        git \
+        tar \
+        zip
+
 COPY --link --from=build-elixir /ELIXIR_LOCAL/usr/local /usr/local

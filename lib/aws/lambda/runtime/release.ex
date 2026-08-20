@@ -4,8 +4,6 @@ defmodule AWS.Lambda.Runtime.Release do
   turn a plain release into a Lambda-ready package.
   """
 
-  require Logger
-
   ## Public functions
 
   def lambda(opts \\ []) do
