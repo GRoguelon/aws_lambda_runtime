@@ -22,3 +22,5 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 aws_lambda_runtime-*.tar
 
+# Ignore Claude files
+.claude/
