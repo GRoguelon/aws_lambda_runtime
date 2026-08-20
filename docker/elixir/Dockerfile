@@ -46,6 +46,7 @@ RUN mix do local.hex --force + local.rebar --force
 FROM ${ELIXIR_IMAGE} AS final
 
 LABEL org.opencontainers.image.source=https://github.com/GRoguelon/aws_lambda_runtime
+LABEL org.opencontainers.image.description="Elixir toolchain on top of the lambda-layer-erlang image, used as the build environment for mix aws_lambda.build to compile and package AWS Lambda functions"
 
 ENV MIX_HOME=/usr/local/lib/elixir/.mix \
     HEX_HOME=/usr/local/lib/elixir/.hex

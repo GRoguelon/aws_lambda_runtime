@@ -99,6 +99,7 @@ RUN set -eux; \
 FROM ${LAMBDA_IMAGE} AS final
 
 LABEL org.opencontainers.image.source=https://github.com/GRoguelon/aws_lambda_runtime
+LABEL org.opencontainers.image.description="Minimal Erlang/OTP runtime for AWS Lambda, built on the provided:al2023 base image; also extracted as an AWS Lambda layer"
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
