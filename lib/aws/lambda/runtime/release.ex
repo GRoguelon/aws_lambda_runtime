@@ -20,7 +20,8 @@ defmodule AWS.Lambda.Runtime.Release do
       include_executables_for: [:unix],
       strip_beams: true,
       quiet: true,
-      steps: [:assemble, &copy_bootstrap/1, &copy_release_files/1]
+      rel_templates_path: priv_path("priv/rel"),
+      steps: [:assemble]
     ]
     |> maybe_strip_iex(opts)
     |> maybe_before_steps(opts)
