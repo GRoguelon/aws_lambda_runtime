@@ -79,7 +79,7 @@ defmodule Mix.Tasks.AwsLambda.Build do
 
     release = opts[:release] || default_release()
     platform = opts[:platform] || @default_platform
-    image = "#{@image_prefix}:#{elixir_version}-erlang-#{erlang_version}-arm64"
+    image = "#{@image_prefix}:#{elixir_version}-erlang-#{erlang_version}"
     output = Path.expand(opts[:output] || Path.join("_build", "#{release}.zip"), app_root)
     dnf_packages = ["tar", "zip" | Keyword.get_values(opts, :dep)]
 
