@@ -6,28 +6,20 @@ defmodule Mix.Tasks.AwsLambda.BuildTest do
                   is_nil(System.find_executable("tar"))) &&
                  "docker and tar are required to exercise mix aws_lambda.build"
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "aws_lambda_build_test_#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(root)
-
-    on_exit(fn -> File.rm_rf!(root) end)
-
-    {:ok, root: root}
-  end
-
-  test "raises when the aws_lambda_runtime source is missing", %{root: root} do
-    assert_raise Mix.Error, ~r/expected aws_lambda_runtime source/, fn ->
-      Mix.Tasks.AwsLambda.Build.run(["--root", root])
+  test "raises when the Erlang/Elixir versions are missing" do
+    assert_raise Mix.Error, ~r/expected an Erlang version and an Elixir version/, fn ->
+      Mix.Tasks.AwsLambda.Build.run([])
     end
   end
 
-  test "raises when the builder Dockerfile is missing", %{root: root} do
-    File.mkdir_p!(Path.join(root, "aws_lambda_runtime"))
-
-    assert_raise Mix.Error, ~r/expected a Dockerfile/, fn ->
-      Mix.Tasks.AwsLambda.Build.run(["--root", root])
+  test "raises when the builder image can't be pulled" do
+    assert_raise Mix.Error, ~r/no builder image found/, fn ->
+      Mix.Tasks.AwsLambda.Build.run([
+        "0.0.0-does-not-exist",
+        "0.0.0-does-not-exist",
+        "--release",
+        "unused"
+      ])
     end
   end
 end

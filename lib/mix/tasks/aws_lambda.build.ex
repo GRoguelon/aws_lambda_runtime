@@ -4,31 +4,26 @@ defmodule Mix.Tasks.AwsLambda.Build do
   @shortdoc "Packages a Lambda release into a deployable zip using the Elixir builder image"
 
   @moduledoc """
-  Builds this project's Lambda release inside the `layers/elixir` Docker image
-  and downloads the resulting deployment zip.
+  Builds this project's Lambda release inside the prebuilt Elixir builder
+  image and downloads the resulting deployment zip.
 
-  Run from a function app (e.g. `hello_function`) that depends on
-  `:aws_lambda_runtime` as a sibling path dependency:
+  Run from your function app's directory, passing the Erlang and Elixir
+  versions to build with:
 
-      mix aws_lambda.build
-
-  This assumes the monorepo layout:
-
-      <root>/
-        layers/elixir/Dockerfile
-        aws_lambda_runtime/
-        hello_function/        <- current directory when the task runs
+      mix aws_lambda.build 29.0.5 1.20.3
 
   ## What it does
 
-    1. Builds the `final-elixir` target of `layers/elixir/Dockerfile` into a
-       local image.
+    1. Pulls the `ghcr.io/groguelon/lambda-layer-elixir:<elixir>-erlang-<erlang>-arm64`
+       image, erroring out if no image matches the given versions.
     2. Creates a container from that image.
-    3. Copies this app's source and the `aws_lambda_runtime` source into it.
-    4. Runs `mix deps.get` and `mix release` inside the container.
-    5. Zips the release directory inside the container.
-    6. Copies the zip back out to the host.
-    7. Removes the container.
+    3. Installs `tar` in the container (the image doesn't ship with it).
+    4. Copies this app's source into it.
+    5. Runs `mix deps.get` and `mix release` inside the container (fetching
+       `:aws_lambda_runtime` and any other declared deps).
+    6. Zips the release directory inside the container.
+    7. Copies the zip back out to the host.
+    8. Removes the container.
 
   ## Options
 
@@ -36,17 +31,12 @@ defmodule Mix.Tasks.AwsLambda.Build do
       first release declared in `mix.exs`.
     * `--output` / `-o` - where to write the zip on the host. Defaults to
       `_build/<release>.zip`.
-    * `--root` - path to the monorepo root (parent of `layers/` and this
-      app). Defaults to `..` relative to the current directory.
-    * `--image` - tag for the builder image. Defaults to
-      `aws-lambda-elixir-builder:latest`.
-    * `--platform` - Docker platform to build/run for. Defaults to
-      `linux/arm64`.
+    * `--platform` - Docker platform to run for. Defaults to `linux/arm64`.
   """
 
   ## Module attributes
 
-  @default_image "aws-lambda-elixir-builder:latest"
+  @image_prefix "ghcr.io/groguelon/lambda-layer-elixir"
   @default_platform "linux/arm64"
 
   ## Public functions
@@ -54,51 +44,53 @@ defmodule Mix.Tasks.AwsLambda.Build do
   @doc "Entry point invoked by `mix aws_lambda.build`. See the moduledoc for details."
   @impl Mix.Task
   def run(args) do
-    {opts, _args} =
+    {opts, args} =
       OptionParser.parse!(args,
         strict: [
           release: :string,
           output: :string,
-          root: :string,
-          image: :string,
           platform: :string
         ],
         aliases: [r: :release, o: :output]
       )
+
+    {erlang_version, elixir_version} =
+      case args do
+        [erlang_version, elixir_version] ->
+          {erlang_version, elixir_version}
+
+        _ ->
+          Mix.raise(
+            "expected an Erlang version and an Elixir version, " <>
+              "e.g. `mix aws_lambda.build 29.0.5 1.20.3`"
+          )
+      end
 
     ensure_executable!("docker")
     ensure_executable!("tar")
 
     app_root = File.cwd!()
     app_name = Path.basename(app_root)
-    root = Path.expand(opts[:root] || "..", app_root)
-    runtime_root = Path.join(root, "aws_lambda_runtime")
-    dockerfile_dir = Path.join([root, "layers", "elixir"])
-
-    unless File.dir?(runtime_root) do
-      Mix.raise("expected aws_lambda_runtime source at #{runtime_root}, but it doesn't exist")
-    end
-
-    unless File.exists?(Path.join(dockerfile_dir, "Dockerfile")) do
-      Mix.raise("expected a Dockerfile at #{dockerfile_dir}, but it doesn't exist")
-    end
 
     release = opts[:release] || default_release()
-    image = opts[:image] || @default_image
     platform = opts[:platform] || @default_platform
+    image = "#{@image_prefix}:#{elixir_version}-erlang-#{erlang_version}-arm64"
     output = Path.expand(opts[:output] || Path.join("_build", "#{release}.zip"), app_root)
 
     container = "#{app_name}-lambda-build-#{System.unique_integer([:positive])}"
 
-    Mix.shell().info("==> Building builder image (#{image})")
-    build_image!(image, platform, dockerfile_dir)
+    Mix.shell().info("==> Pulling builder image (#{image})")
+    pull_image!(image, platform)
 
     Mix.shell().info("==> Creating container #{container}")
     create_container!(container, image, platform)
 
     try do
+      Mix.shell().info("==> Installing tar in container")
+      install_tar!(container)
+
       Mix.shell().info("==> Copying source into container")
-      copy_source!(container, root, [runtime_root, app_root])
+      copy_source!(container, app_root)
 
       Mix.shell().info("==> Packaging release (mix release #{release})")
       package_release!(container, app_name, release)
@@ -125,17 +117,17 @@ defmodule Mix.Tasks.AwsLambda.Build do
     end
   end
 
-  defp build_image!(image, platform, dockerfile_dir) do
-    docker!([
-      "build",
-      "--platform",
-      platform,
-      "--target",
-      "final-elixir",
-      "-t",
-      image,
-      dockerfile_dir
-    ])
+  defp pull_image!(image, platform) do
+    case docker(["pull", "--platform", platform, image]) do
+      :ok ->
+        :ok
+
+      {:error, _status} ->
+        Mix.raise(
+          "no builder image found for #{image}. Check that this Erlang/Elixir " <>
+            "version combination has been published to #{@image_prefix}."
+        )
+    end
   end
 
   defp create_container!(container, image, platform) do
@@ -155,28 +147,39 @@ defmodule Mix.Tasks.AwsLambda.Build do
     docker!(["start", container])
   end
 
-  # Tars the given source directories (relative to `root`, so the container
-  # gets the same sibling layout as the host) on the host, excluding local
-  # build artifacts, then uploads and extracts the tar inside the container.
-  # This avoids copying host-compiled (non-Linux) _build/deps artifacts into
-  # the container, and avoids the multi-step edge cases of `docker cp` when
-  # copying several directories at once.
-  defp copy_source!(container, root, dirs) do
+  # The lambda-layer-elixir image is trimmed down to the Lambda runtime
+  # deps (ca-certificates, ncurses-libs, unixODBC) and doesn't ship `tar`,
+  # which we need to get the source into the container.
+  defp install_tar!(container) do
+    docker!([
+      "exec",
+      container,
+      "dnf",
+      "-y",
+      "--setopt=install_weak_deps=0",
+      "--nodocs",
+      "install",
+      "tar"
+    ])
+  end
+
+  # Tars the app directory on the host, excluding local build artifacts, then
+  # uploads and extracts the tar inside the container. This avoids copying
+  # host-compiled (non-Linux) _build/deps artifacts into the container.
+  defp copy_source!(container, app_root) do
     tar_path = Path.join(System.tmp_dir!(), "#{container}.tar")
 
-    entries = Enum.map(dirs, &Path.relative_to(&1, root))
-
-    tar!(
-      [
-        "--exclude=_build",
-        "--exclude=deps",
-        "--exclude=.git",
-        "-cf",
-        tar_path,
-        "-C",
-        root
-      ] ++ entries
-    )
+    tar!([
+      "--no-xattrs",
+      "--exclude=_build",
+      "--exclude=deps",
+      "--exclude=.git",
+      "-cf",
+      tar_path,
+      "-C",
+      Path.dirname(app_root),
+      Path.basename(app_root)
+    ])
 
     docker!(["exec", container, "mkdir", "-p", "/build"])
     docker!(["cp", tar_path, "#{container}:/build/source.tar"])
@@ -204,7 +207,7 @@ defmodule Mix.Tasks.AwsLambda.Build do
       container,
       "sh",
       "-c",
-      "mix deps.get && mix release #{release}"
+      "mix do deps.get + release #{release}"
     ])
   end
 
