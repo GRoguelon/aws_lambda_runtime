@@ -27,3 +27,4 @@ aws_lambda_runtime-*.tar
 
 # Ignore out files
 /out
+*.zip

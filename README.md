@@ -123,7 +123,18 @@ Point the function's *Handler* setting at it, e.g. `HelloFunction` or
 `HelloFunction.handler` — see the `AWS.Lambda.Runtime.Handler` moduledoc for
 every accepted format.
 
-### 4. Build and deploy
+### 4. Configure the handler
+
+Set the `:aws_lambda_runtime, :handler` config to the module from step 3, in
+`config/config.exs`:
+
+```elixir
+import Config
+
+config :aws_lambda_runtime, handler: HelloFunction
+```
+
+### 5. Build and deploy
 
 ```sh
 mix aws_lambda.build 29.0.5 1.20.3 --output .
@@ -137,7 +148,7 @@ matches the target `provided.al2023` runtime regardless of your local
 OS/architecture. See `mix help aws_lambda.build` for the full list of
 options (`--release`, `--platform`, `--dep`, ...).
 
-### 5. Push to AWS
+### 6. Push to AWS
 
 Create the function once, referencing the OTP layer [published above](#the-aws-layer-for-otp):
 
@@ -164,13 +175,13 @@ aws lambda update-function-code --publish --function-name elixir-hello \
 
 ## Performance
 
-Rough numbers for the `HelloFunction` example above, deployed with 512MB of
+Rough numbers for the `HelloFunction` example above, deployed with 256MB of
 memory:
 
 - **Cold start:** ~1.5-2s
 - **Execution time:** ~2ms
 - **Memory used:** ~180MB
-- **Cost:** ~$0.0000135334 per call in `us-east-1`
+- **Cost:** ~$0.0000068667 per call in `us-east-1`
 
 ## The AWS Layer for OTP
 
