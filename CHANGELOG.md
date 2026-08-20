@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-20
+
+### Added
+
+- Docker build scripts (`docker/erlang`, `docker/elixir`) and READMEs for
+  building the `lambda-layer-erlang` and `lambda-layer-elixir` images that
+  `mix aws_lambda.build` pulls from.
+- `mix aws_lambda.build` — `--dep`/`-d` flag to install extra `dnf` packages
+  (e.g. `git`) in the build container alongside `tar`.
+
+### Changed
+
+- `mix aws_lambda.build` — colorized, more consistent step output; internal
+  cleanup.
+
+### Removed
+
+- `AWS.Lambda.Runtime.MixRelease` (`priv/mix/release.exs`) — the release
+  steps it configured are documented directly in the README instead.
+
+[0.1.1]: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/v0.1.1
+
 ## [0.1.0] - 2026-08-19
 
 ### Added
