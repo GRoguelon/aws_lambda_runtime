@@ -14,6 +14,37 @@ defmodule AWS.Lambda.Runtime.Release do
 
   ## Public functions
 
+  def lambda do
+    [
+      include_erts: false,
+      include_executables_for: [:unix],
+      strip_beams: true,
+      quiet: true,
+      steps: [
+        &strip_iex/1,
+        :assemble,
+        &copy_bootstrap/1,
+        &copy_release_files/1
+      ]
+    ]
+  end
+
+  def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
+    applications =
+      applications
+      |> Map.delete(:iex)
+      |> Map.update!(:elixir, fn elixir ->
+        Keyword.update!(elixir, :modules, &List.delete(&1, :iex))
+      end)
+
+    boot_scripts =
+      boot_scripts
+      |> Map.update!(:start, &Keyword.delete(&1, :iex))
+      |> Map.update!(:start_clean, &Keyword.delete(&1, :iex))
+
+    %{release | applications: applications, boot_scripts: boot_scripts}
+  end
+
   @doc """
   Copies `priv/bootstrap` to the root of the release and makes it executable.
 
