@@ -51,20 +51,9 @@ Fetch it:
 mix deps.get
 ```
 
-Then, at the very top of `mix.exs` — above `defmodule HelloFunction.MixProject do`,
-as the first line of the file — require the release helper shipped in
-`priv/mix/release.exs`:
-
-```elixir
-Code.require_file("deps/aws_lambda_runtime/priv/mix/release.exs", __DIR__)
-```
-
-This has to happen outside of any module body, and before Mix has compiled
-any dependency — `AWS.Lambda.Runtime.MixRelease` is a plain script rather
-than part of the compiled `:aws_lambda_runtime` application, specifically so
-it is available this early.
-
-Then, inside `project/0`, declare the release:
+Then, inside `project/0`, declare the release, and add a private `releases/0`
+function that wires up the steps `:aws_lambda_runtime` needs to turn a plain
+release into a Lambda-ready package:
 
 ```elixir
 def project do
@@ -74,15 +63,35 @@ def project do
     elixir: "~> 1.18",
     start_permanent: Mix.env() == :prod,
     deps: deps(),
-    releases: AWS.Lambda.Runtime.MixRelease.releases()
+    releases: releases()
   ]
 end
 ```
 
-`AWS.Lambda.Runtime.MixRelease.releases/1` returns a release configured with
-`include_erts: false` (ERTS comes from the Lambda layer, see below) and the
-steps that copy the `bootstrap` entrypoint and the `vm.args`/`env.sh` files
-Lambda's `provided.al2023` runtime expects.
+```elixir
+defp releases do
+  [
+    lambda: [
+      include_erts: false,
+      include_executables_for: [:unix],
+      strip_beams: true,
+      quiet: true,
+      steps: [
+        :assemble,
+        &AWS.Lambda.Runtime.Release.copy_bootstrap/1,
+        &AWS.Lambda.Runtime.Release.copy_release_files/1
+      ]
+    ]
+  ]
+end
+```
+
+`include_erts: false` because ERTS comes from the Lambda layer, see below.
+`copy_bootstrap/1` and `copy_release_files/1` run after `:assemble` and copy
+the `bootstrap` entrypoint and the `vm.args`/`env.sh` files Lambda's
+`provided.al2023` runtime expects — running them as steps (rather than at
+`project/0` evaluation time) guarantees `:aws_lambda_runtime` is already
+compiled and loaded.
 
 ### 3. Write a handler
 
