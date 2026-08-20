@@ -89,7 +89,7 @@ defmodule AWS.Lambda.Runtime.Release do
 
   defp maybe_strip_iex(release, opts) do
     if Keyword.get(opts, :strip_iex) == true do
-      Keyword.update!(release, :steps, &[(&strip_iex/1) | &1])
+      Keyword.update!(release, :steps, fn steps -> [(&strip_iex/1) | steps] end)
     else
       release
     end
