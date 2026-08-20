@@ -18,6 +18,7 @@ defmodule AWS.Lambda.Runtime.Release do
     |> maybe_strip_iex(opts)
     |> maybe_before_steps(opts)
     |> maybe_after_steps(opts)
+    |> IO.inspect()
   end
 
   def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
