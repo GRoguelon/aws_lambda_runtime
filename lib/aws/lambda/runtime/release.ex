@@ -7,6 +7,8 @@ defmodule AWS.Lambda.Runtime.Release do
   ## Public functions
 
   def lambda(opts \\ []) do
+    {custom_opts, opts} = Keyword.split(opts, ~w[strip_iex before_steps after_steps]a)
+
     [
       include_erts: false,
       include_executables_for: [:unix],
@@ -15,10 +17,10 @@ defmodule AWS.Lambda.Runtime.Release do
       rel_templates_path: priv_path("priv/rel"),
       steps: [:assemble]
     ]
-    |> maybe_strip_iex(opts)
-    |> maybe_before_steps(opts)
-    |> maybe_after_steps(opts)
-    |> IO.inspect()
+    |> Keyword.merge(opts)
+    |> maybe_strip_iex(custom_opts)
+    |> maybe_before_steps(custom_opts)
+    |> maybe_after_steps(custom_opts)
   end
 
   def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
