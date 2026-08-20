@@ -180,9 +180,13 @@ from a Lambda layer mounted at `/opt/otp`, matching the OTP version the
 release was built against.
 
 Prebuilt layer zips are published as GitHub release assets (see
-[`docker/erlang`](docker/erlang/README.md) for how they're built). Download
-the one matching your OTP version and architecture, and publish it as a
-layer version:
+[`docker/erlang`](docker/erlang/README.md) for how they're built). Available
+releases:
+
+- Erlang 29.0.5: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/erlang-29.0.5
+
+Download the one matching your OTP version and architecture, and publish it
+as a layer version:
 
 ```sh
 OTP_VERSION=29.0.5 PLATFORM=amd64 AWS_PROFILE=default AWS_REGION=us-east-1; \
