@@ -4,6 +4,8 @@ defmodule AWS.Lambda.Runtime.Release do
   turn a plain release into a Lambda-ready package.
   """
 
+  require Logger
+
   ## Public functions
 
   def lambda(opts \\ []) do
@@ -21,7 +23,6 @@ defmodule AWS.Lambda.Runtime.Release do
     |> maybe_strip_iex(custom_opts)
     |> maybe_before_steps(custom_opts)
     |> maybe_after_steps(custom_opts)
-    |> IO.inspect(label: "Lambda release", limit: :infinity, printable_limit: :infinity)
   end
 
   def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
@@ -55,22 +56,34 @@ defmodule AWS.Lambda.Runtime.Release do
   end
 
   defp maybe_before_steps(release, opts) do
-    before_steps = Keyword.get(opts, :before_steps)
+    before_steps = Keyword.get(opts, :before_steps) |> IO.inspect(label: "Value")
 
-    if is_list(before_steps) do
-      Keyword.update!(release, :steps, &(before_steps ++ &1))
-    else
-      release
+    cond do
+      is_list(before_steps) ->
+        Keyword.update(release, :steps, before_steps ++ [:assemble], &(before_steps ++ &1))
+
+      not is_nil(before_steps) ->
+        raise ArgumentError,
+              "The option `before_steps` must be a list, got: #{inspect(before_steps)}"
+
+      true ->
+        release
     end
   end
 
   defp maybe_after_steps(release, opts) do
     after_steps = Keyword.get(opts, :after_steps)
 
-    if is_list(after_steps) do
-      Keyword.update!(release, :steps, &(&1 ++ after_steps))
-    else
-      release
+    cond do
+      is_list(after_steps) ->
+        Keyword.update(release, :steps, [:assemble] ++ after_steps, &(&1 ++ after_steps))
+
+      not is_nil(after_steps) ->
+        raise ArgumentError,
+              "The option `after_steps` must be a list, got: #{inspect(after_steps)}"
+
+      true ->
+        release
     end
   end
 end
