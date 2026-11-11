@@ -132,7 +132,7 @@ config :aws_lambda_runtime, handler: HelloFunction
 ### 5. Build and deploy
 
 ```sh
-mix aws_lambda.build 29.0.5 1.20.3 --output .
+mix aws_lambda.build 29.1.2 1.20.5 --output .
 ```
 
 builds the release inside the prebuilt [`lambda-layer-elixir`](docker/elixir/README.md)
@@ -148,7 +148,7 @@ options (`--release`, `--platform`, `--dep`, ...).
 Create the function once, referencing the OTP layer [published above](#the-aws-layer-for-otp):
 
 ```sh
-PLATFORM=arm64 OTP_VERSION=29.0.5; \
+PLATFORM=arm64 OTP_VERSION=29.1.2; \
 aws lambda create-function \
   --function-name elixir-hello \
   --runtime provided.al2023 \
@@ -189,13 +189,14 @@ Prebuilt layer zips are published as GitHub release assets (see
 [`docker/erlang`](docker/erlang/README.md) for how they're built). Available
 releases:
 
+- Erlang 29.1.2: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/erlang-29.1.2
 - Erlang 29.0.5: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/erlang-29.0.5
 
 Download the one matching your OTP version and architecture, and publish it
 as a layer version:
 
 ```sh
-OTP_VERSION=29.0.5 PLATFORM=amd64 AWS_PROFILE=default AWS_REGION=us-east-1; \
+OTP_VERSION=29.1.2 PLATFORM=amd64 AWS_PROFILE=default AWS_REGION=us-east-1; \
 curl -fsSL -o layer.zip "https://github.com/GRoguelon/aws_lambda_runtime/releases/download/erlang-${OTP_VERSION}/lambda-layer-erlang-${OTP_VERSION}-${PLATFORM}.zip" \
   && aws lambda publish-layer-version \
        --layer-name "erlang-otp-${OTP_VERSION}" \
