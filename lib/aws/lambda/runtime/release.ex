@@ -54,7 +54,7 @@ defmodule AWS.Lambda.Runtime.Release do
   end
 
   defp maybe_before_steps(release, opts) do
-    before_steps = Keyword.get(opts, :before_steps) |> IO.inspect(label: "Value")
+    before_steps = Keyword.get(opts, :before_steps)
 
     cond do
       is_list(before_steps) ->
