@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `AWS.Lambda.Runtime.Release.lambda/1` — returns the whole release
+  configuration (`include_erts: false`, stripped beams, the `bootstrap`
+  entrypoint and the `vm.args`/`env.sh` templates). Any `mix release` option
+  overrides its defaults, and it accepts `:strip_iex`, `:before_steps` and
+  `:after_steps`. Declare it lazily:
+  `releases: [lambda: fn -> AWS.Lambda.Runtime.Release.lambda() end]`.
+- `AWS.Lambda.Runtime.Release.strip_iex/1` — release step removing IEx from
+  the package.
+- `bootstrap` exits with a clear error when `bin/lambda` is missing, i.e.
+  when the release isn't named `lambda`.
+- The `lambda-layer-elixir` image ships `git`, `tar` and `zip`.
+
+### Changed
+
+- `mix aws_lambda.build` pulls the multi-arch
+  `lambda-layer-elixir:<elixir>-erlang-<erlang>` image and selects the
+  architecture with `--platform`, instead of always pulling the `-arm64` tag.
+- `bootstrap` and the `vm.args`/`env.sh` templates are applied through
+  `rel_templates_path` and its `overlays` directory, instead of being copied by
+  custom steps.
+
+### Removed
+
+- `AWS.Lambda.Runtime.Release.copy_bootstrap/1` and
+  `AWS.Lambda.Runtime.Release.copy_release_files/1` — replace the release
+  configuration in `mix.exs` with `AWS.Lambda.Runtime.Release.lambda/1`.
+
+[Unreleased]: https://github.com/GRoguelon/aws_lambda_runtime/compare/v0.1.1...HEAD
+
 ## [0.1.1] - 2026-08-20
 
 ### Added
