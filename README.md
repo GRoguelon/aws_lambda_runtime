@@ -51,9 +51,7 @@ Fetch it:
 mix deps.get
 ```
 
-Then, inside `project/0`, declare the release, and add a private `releases/0`
-function that wires up the steps `:aws_lambda_runtime` needs to turn a plain
-release into a Lambda-ready package:
+Then, inside `project/0`, declare a release named `lambda`:
 
 ```elixir
 def project do
@@ -63,35 +61,32 @@ def project do
     elixir: "~> 1.18",
     start_permanent: Mix.env() == :prod,
     deps: deps(),
-    releases: releases()
+    releases: [lambda: fn -> AWS.Lambda.Runtime.Release.lambda() end]
   ]
 end
 ```
+
+`AWS.Lambda.Runtime.Release.lambda/1` returns the release options Lambda's
+`provided.al2023` runtime needs: `include_erts: false` because ERTS comes from
+the Lambda layer (see below), plus the `bootstrap` entrypoint and the
+`vm.args`/`env.sh` files copied into the package. The anonymous function defers
+the call until `mix release` runs, once `:aws_lambda_runtime` is compiled and
+loaded. The release must be named `lambda`, as `bootstrap` starts
+`bin/lambda`.
+
+Any `mix release` option given to `lambda/1` overrides its defaults, and it
+accepts a few options of its own:
+
+- `strip_iex: true` removes IEx from the release, for a smaller package.
+- `before_steps:` and `after_steps:` add steps before and after the others.
 
 ```elixir
-defp releases do
-  [
-    lambda: [
-      include_erts: false,
-      include_executables_for: [:unix],
-      strip_beams: true,
-      quiet: true,
-      steps: [
-        :assemble,
-        &AWS.Lambda.Runtime.Release.copy_bootstrap/1,
-        &AWS.Lambda.Runtime.Release.copy_release_files/1
-      ]
-    ]
-  ]
-end
+releases: [
+  lambda: fn ->
+    AWS.Lambda.Runtime.Release.lambda(strip_iex: true, after_steps: [:tar])
+  end
+]
 ```
-
-`include_erts: false` because ERTS comes from the Lambda layer, see below.
-`copy_bootstrap/1` and `copy_release_files/1` run after `:assemble` and copy
-the `bootstrap` entrypoint and the `vm.args`/`env.sh` files Lambda's
-`provided.al2023` runtime expects — running them as steps (rather than at
-`project/0` evaluation time) guarantees `:aws_lambda_runtime` is already
-compiled and loaded.
 
 ### 3. Write a handler
 
