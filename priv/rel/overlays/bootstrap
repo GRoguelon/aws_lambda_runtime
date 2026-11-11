@@ -22,5 +22,14 @@ export ERL_CRASH_DUMP_SECONDS=0
 
 export ELIXIR_ERL_OPTIONS="-noinput"
 
+RELEASE_SCRIPT="${LAMBDA_TASK_ROOT:-/var/task}/bin/lambda"
+
+# The release must be named `lambda`; fail with a clear message in the
+# function's logs rather than a bare "not found".
+if [ ! -x "$RELEASE_SCRIPT" ]; then
+  echo "bootstrap: $RELEASE_SCRIPT not found, the release must be named \`lambda\`" >&2
+  exit 1
+fi
+
 # exec so the VM becomes the process Lambda supervises and receives its signals.
-exec "${LAMBDA_TASK_ROOT:-/var/task}/bin/lambda" start
+exec "$RELEASE_SCRIPT" start
