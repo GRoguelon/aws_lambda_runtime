@@ -1,11 +1,34 @@
 defmodule AWS.Lambda.Runtime.Release do
   @moduledoc """
-  `mix release` steps wired in by `AWS.Lambda.Runtime.MixRelease.releases/1` to
-  turn a plain release into a Lambda-ready package.
+  `mix release` configuration turning a plain release into a package for
+  Lambda's `provided.al2023` runtime. See `lambda/1`.
   """
 
   ## Public functions
 
+  @doc """
+  Returns the options of a Lambda release.
+
+  The defaults are `include_erts: false` (ERTS comes from the OTP layer),
+  `include_executables_for: [:unix]`, `strip_beams: true`, `quiet: true` and a
+  `rel_templates_path` providing the `vm.args`, `env.sh` and `bootstrap` files
+  Lambda expects. Any `mix release` option given in `opts` overrides them.
+
+  The release must be named `lambda`, as `bootstrap` starts `bin/lambda`.
+
+  ## Options
+
+    * `:strip_iex` - when `true`, removes IEx from the release with
+      `strip_iex/1`.
+    * `:before_steps` - a list of steps to run before the other steps.
+    * `:after_steps` - a list of steps to run after the other steps.
+
+  Call it from an anonymous function in `mix.exs`, so it only runs once
+  `:aws_lambda_runtime` is compiled:
+
+      releases: [lambda: fn -> AWS.Lambda.Runtime.Release.lambda(strip_iex: true) end]
+  """
+  @spec lambda(keyword()) :: keyword()
   def lambda(opts \\ []) do
     {custom_opts, opts} = Keyword.split(opts, ~w[strip_iex before_steps after_steps]a)
 
@@ -23,6 +46,11 @@ defmodule AWS.Lambda.Runtime.Release do
     |> maybe_after_steps(custom_opts)
   end
 
+  @doc """
+  Release step removing the `:iex` application from the release and its boot
+  scripts, for a smaller package. `bin/lambda remote` won't work without it.
+  """
+  @spec strip_iex(Mix.Release.t()) :: Mix.Release.t()
   def strip_iex(%{applications: applications, boot_scripts: boot_scripts} = release) do
     applications =
       applications
