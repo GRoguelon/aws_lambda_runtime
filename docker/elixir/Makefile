@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-OTP_VERSION    ?= 29.0.5
-ELIXIR_VERSION ?= 1.20.3
+OTP_VERSION    ?= 29.1.2
+ELIXIR_VERSION ?= 1.20.5
 ERLANG_IMAGE   ?= ghcr.io/groguelon/lambda-layer-erlang:$(OTP_VERSION)
 
 # x86_64 or arm64 (Lambda's own architecture names)

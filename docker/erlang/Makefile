@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-OTP_VERSION  ?= 29.0.5
+OTP_VERSION  ?= 29.1.2
 LAMBDA_IMAGE ?= public.ecr.aws/lambda/provided:al2023
 
 # x86_64 or arm64 (Lambda's own architecture names)

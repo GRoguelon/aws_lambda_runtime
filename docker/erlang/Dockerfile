@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG OTP_VERSION=29.0.5
+ARG OTP_VERSION=29.1.2
 ARG LAMBDA_IMAGE=public.ecr.aws/lambda/provided:al2023
 
 FROM ${LAMBDA_IMAGE} AS build-erlang

@@ -52,7 +52,7 @@ All of these can be overridden on the command line, e.g.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OTP_VERSION` | `29.0.5` | Erlang/OTP version to build. |
+| `OTP_VERSION` | `29.1.2` | Erlang/OTP version to build. |
 | `LAMBDA_IMAGE` | `public.ecr.aws/lambda/provided:al2023` | Base image used for both build and final stages. |
 | `PLATFORM` | detected from `uname -m` (`amd64` or `arm64`) | Target architecture; maps to Docker's `linux/amd64` / `linux/arm64`. |
 | `BASE_TAG` | `ghcr.io/groguelon/lambda-layer-erlang:$(OTP_VERSION)` | Registry tag without the platform suffix. |
@@ -73,7 +73,7 @@ Build, push and package the layer for both architectures, then publish a
 combined multi-arch image:
 
 ```sh
-make all OTP_VERSION=29.0.5
+make all OTP_VERSION=29.1.2
 ```
 
 The resulting Lambda layer zip(s) are written to `../../out/`, ready to be

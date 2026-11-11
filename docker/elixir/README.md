@@ -56,12 +56,12 @@ Run `make` or `make help` to list targets and current config values.
 ### Configuration variables
 
 All of these can be overridden on the command line, e.g.
-`make build ELIXIR_VERSION=1.20.3 OTP_VERSION=29.0.5 PLATFORM=amd64`.
+`make build ELIXIR_VERSION=1.20.5 OTP_VERSION=29.1.2 PLATFORM=amd64`.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OTP_VERSION` | `29.0.5` | Erlang/OTP version the Elixir build targets; also selects the Erlang base image tag. |
-| `ELIXIR_VERSION` | `1.20.3` | Elixir version to install. |
+| `OTP_VERSION` | `29.1.2` | Erlang/OTP version the Elixir build targets; also selects the Erlang base image tag. |
+| `ELIXIR_VERSION` | `1.20.5` | Elixir version to install. |
 | `ERLANG_IMAGE` | `ghcr.io/groguelon/lambda-layer-erlang:$(OTP_VERSION)` | Base image (build and final stage) — the [Erlang layer](../erlang) image. |
 | `PLATFORM` | detected from `uname -m` (`amd64` or `arm64`) | Target architecture; maps to Docker's `linux/amd64` / `linux/arm64`. |
 | `BASE_TAG` | `ghcr.io/groguelon/lambda-layer-elixir:$(ELIXIR_VERSION)-erlang-$(OTP_VERSION)` | Registry tag without the platform suffix. |
@@ -79,7 +79,7 @@ Build, push and publish a combined multi-arch image for a given
 Elixir/OTP pair:
 
 ```sh
-make all ELIXIR_VERSION=1.20.3 OTP_VERSION=29.0.5
+make all ELIXIR_VERSION=1.20.5 OTP_VERSION=29.1.2
 ```
 
 Make sure the corresponding Erlang layer image has already been built and
