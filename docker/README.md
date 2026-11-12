@@ -34,3 +34,19 @@ its README for details.
 Both directories expose the same shape of Makefile targets (`build`,
 `push`, `merge-images`, `all`, `help`) with `PLATFORM`/version variables
 overridable on the command line — see each README for details.
+
+## Automated builds
+
+The [`Docker images`](../.github/workflows/docker-images.yml) workflow runs
+daily (and on demand from the Actions tab, with an optional dry run). It
+looks up the latest Erlang/OTP patch of every major from `OTP_MIN_MAJOR` on,
+and the latest Elixir patch of every minor from `ELIXIR_MIN_MINOR` on that
+Hex has built for it, then builds whatever is missing from the registry:
+
+1. the Erlang image for each architecture on a native runner, the merged
+   multi-arch image, and an `erlang-<version>` GitHub release holding both
+   layer zips;
+2. then the Elixir images on top of it.
+
+Images that already exist are never rebuilt. To backfill older versions,
+lower `OTP_MIN_MAJOR`/`ELIXIR_MIN_MINOR` in the workflow.

@@ -1,8 +1,8 @@
 ARG OTP_VERSION=29.1.2
 ARG ELIXIR_VERSION=1.20.5
-ARG ELIXIR_IMAGE=ghcr.io/groguelon/lambda-layer-erlang:${OTP_VERSION}
+ARG ERLANG_IMAGE=ghcr.io/groguelon/lambda-layer-erlang:${OTP_VERSION}
 
-FROM ${ELIXIR_IMAGE} AS build-elixir
+FROM ${ERLANG_IMAGE} AS build-elixir
 
 RUN sed -i 's/^keepcache=.*/keepcache=1/' /etc/dnf/dnf.conf || \
     echo 'keepcache=1' >> /etc/dnf/dnf.conf
@@ -43,7 +43,7 @@ RUN mix do local.hex --force + local.rebar --force
 
 ## Final
 
-FROM ${ELIXIR_IMAGE} AS final
+FROM ${ERLANG_IMAGE} AS final
 
 LABEL org.opencontainers.image.source=https://github.com/GRoguelon/aws_lambda_runtime
 LABEL org.opencontainers.image.description="Elixir toolchain on top of the lambda-layer-erlang image, used as the build environment for mix aws_lambda.build to compile and package AWS Lambda functions"

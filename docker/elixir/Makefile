@@ -73,7 +73,8 @@ build:  ## Build the Docker image (required: ELIXIR_VERSION,OTP_VERSION, optiona
 	@docker buildx build \
 		--platform $(DOCKER_PLATFORM) \
 		--build-arg OTP_VERSION=$(OTP_VERSION) \
-		--build-arg LAMBDA_IMAGE=$(LAMBDA_IMAGE) \
+		--build-arg ELIXIR_VERSION=$(ELIXIR_VERSION) \
+		--build-arg ERLANG_IMAGE=$(ERLANG_IMAGE) \
 		--load \
 		-t $(IMAGE_TAG) \
 		.

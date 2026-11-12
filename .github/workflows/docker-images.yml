@@ -1,0 +1,174 @@
+name: Docker images
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only list the images that would be built
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-images
+
+env:
+  # Every Erlang/OTP major from this one on gets its latest patch built, and
+  # every Elixir minor from this one on gets its latest patch built for them.
+  OTP_MIN_MAJOR: "29"
+  ELIXIR_MIN_MINOR: "1.20"
+
+jobs:
+  plan:
+    name: Find missing images
+    runs-on: ubuntu-24.04
+    outputs:
+      erlang: ${{ steps.plan.outputs.erlang }}
+      elixir: ${{ steps.plan.outputs.elixir }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: plan
+        run: .github/scripts/plan-builds.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  erlang:
+    name: Erlang ${{ matrix.otp }} / ${{ matrix.platform }}
+    needs: plan
+    if: needs.plan.outputs.erlang != '[]' && !inputs.dry_run
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ${{ fromJSON(needs.plan.outputs.erlang) }}
+        platform: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build, push and extract the layer
+        working-directory: docker/erlang
+        run: make build push extract OTP_VERSION=${{ matrix.otp }} PLATFORM=${{ matrix.platform }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lambda-layer-erlang-${{ matrix.otp }}-${{ matrix.platform }}
+          path: out/lambda-layer-erlang-${{ matrix.otp }}-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  erlang-publish:
+    name: Publish Erlang ${{ matrix.otp }}
+    needs: [plan, erlang]
+    if: needs.plan.outputs.erlang != '[]' && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ${{ fromJSON(needs.plan.outputs.erlang) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lambda-layer-erlang-${{ matrix.otp }}-*
+          path: out
+          merge-multiple: true
+
+      - name: Publish the layer release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OTP_VERSION: ${{ matrix.otp }}
+        run: |
+          if gh release view "erlang-$OTP_VERSION" > /dev/null 2>&1; then
+            gh release upload "erlang-$OTP_VERSION" out/*.zip --clobber
+          else
+            gh release create "erlang-$OTP_VERSION" out/*.zip \
+              --target "$GITHUB_SHA" \
+              --title "Erlang/OTP $OTP_VERSION" \
+              --notes "AWS Lambda layers for Erlang/OTP $OTP_VERSION (amd64 and arm64). See the README for how to publish them."
+          fi
+
+      # Last, as plan-builds.sh treats the multi-arch tag as "done".
+      - name: Merge the images
+        working-directory: docker/erlang
+        run: make merge-images OTP_VERSION=${{ matrix.otp }}
+
+  elixir:
+    name: Elixir ${{ matrix.build.elixir }} / Erlang ${{ matrix.build.otp }} / ${{ matrix.platform }}
+    needs: [plan, erlang, erlang-publish]
+    # Runs when there was no Erlang image to build, but not when building one failed.
+    if: >-
+      !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.elixir != '[]' && !inputs.dry_run
+      && needs.erlang.result != 'failure' && needs.erlang-publish.result != 'failure'
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.elixir) }}
+        platform: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        working-directory: docker/elixir
+        run: >-
+          make build push
+          ELIXIR_VERSION=${{ matrix.build.elixir }}
+          OTP_VERSION=${{ matrix.build.otp }}
+          PLATFORM=${{ matrix.platform }}
+
+  elixir-publish:
+    name: Publish Elixir ${{ matrix.build.elixir }} / Erlang ${{ matrix.build.otp }}
+    needs: [plan, elixir]
+    if: ${{ !cancelled() && needs.elixir.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.elixir) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Merge the images
+        working-directory: docker/elixir
+        run: make merge-images ELIXIR_VERSION=${{ matrix.build.elixir }} OTP_VERSION=${{ matrix.build.otp }}
