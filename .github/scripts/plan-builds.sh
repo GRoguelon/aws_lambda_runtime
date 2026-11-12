@@ -7,13 +7,16 @@
 #   - lambda-layer-elixir:<elixir>-erlang-<otp> for the latest Elixir patch of
 #     every minor >= ELIXIR_MIN_MINOR that Hex has built for that OTP major.
 #
+# REBUILD=true lists every tracked version, published or not.
+#
 # Writes `erlang` (["29.1.2", ...]) and `elixir` ([{"elixir": "1.20.5",
-# "otp": "29.1.2"}, ...]) to $GITHUB_OUTPUT, or to stdout when run locally.
+# "otp": "29.1.2"}, ...]) to stdout, and to $GITHUB_OUTPUT on GitHub Actions.
 
 set -euo pipefail
 
 OTP_MIN_MAJOR=${OTP_MIN_MAJOR:-29}
 ELIXIR_MIN_MINOR=${ELIXIR_MIN_MINOR:-1.20}
+REBUILD=${REBUILD:-false}
 REPOSITORY=${GITHUB_REPOSITORY:-GRoguelon/aws_lambda_runtime}
 REGISTRY_NAMESPACE=groguelon
 
@@ -76,11 +79,18 @@ declare -A REGISTRY_TOKENS
 image_exists() {
   local repository=$1 tag=$2 status
 
+  [ "$REBUILD" = true ] && return 1
+
   if [ -z "${REGISTRY_TOKENS[$repository]:-}" ]; then
     REGISTRY_TOKENS[$repository]=$(
-      curl -fsSL "https://ghcr.io/token?scope=repository:$REGISTRY_NAMESPACE/$repository:pull" |
-        jq -r .token
-    )
+      curl -fsSL \
+        ${GITHUB_TOKEN:+-u "${GITHUB_ACTOR:-github}:$GITHUB_TOKEN"} \
+        "https://ghcr.io/token?scope=repository:$REGISTRY_NAMESPACE/$repository:pull" |
+        jq -er .token
+    ) || {
+      echo "ghcr.io refused a pull token for $repository; check this repository has access to the package" >&2
+      exit 1
+    }
   fi
 
   status=$(curl -sS -o /dev/null -w '%{http_code}' --head \
@@ -140,7 +150,7 @@ elixir_json=$(printf '%s\n' "${elixir[@]}" |
 {
   echo "erlang=$erlang_json"
   echo "elixir=$elixir_json"
-} >>"${GITHUB_OUTPUT:-/dev/stdout}"
+} | tee -a "${GITHUB_OUTPUT:-/dev/null}"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {

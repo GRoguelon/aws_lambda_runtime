@@ -9,6 +9,10 @@ on:
         description: Only list the images that would be built
         type: boolean
         default: false
+      rebuild:
+        description: Rebuild the tracked versions even if they're already published
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,6 +30,9 @@ jobs:
   plan:
     name: Find missing images
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     outputs:
       erlang: ${{ steps.plan.outputs.erlang }}
       elixir: ${{ steps.plan.outputs.elixir }}
@@ -36,6 +43,7 @@ jobs:
         run: .github/scripts/plan-builds.sh
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild || false }}
 
   erlang:
     name: Erlang ${{ matrix.otp }} / ${{ matrix.platform }}

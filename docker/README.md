@@ -48,5 +48,6 @@ Hex has built for it, then builds whatever is missing from the registry:
    layer zips;
 2. then the Elixir images on top of it.
 
-Images that already exist are never rebuilt. To backfill older versions,
+Images that already exist are only rebuilt when the manual run is started
+with "rebuild" ticked. To backfill older versions,
 lower `OTP_MIN_MAJOR`/`ELIXIR_MIN_MINOR` in the workflow.
