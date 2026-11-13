@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The runtime waits until the release has started every application before
+  polling the Runtime API. It used to start with `:aws_lambda_runtime`, before
+  the function's own application, so the first invocation could reach a
+  handler whose dependencies were not started yet, and their start-up was
+  counted in the invocation instead of Lambda's init phase.
+
 ### Changed
 
 - The scheduler count follows the function's memory size, one per vCPU

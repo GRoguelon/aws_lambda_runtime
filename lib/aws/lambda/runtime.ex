@@ -4,13 +4,17 @@ defmodule AWS.Lambda.Runtime do
 
   Started as a permanent `Task` by the application supervisor. The lifecycle is:
 
-    1. start the `:httpc` profile and resolve the handler (initialisation — any
+    1. wait until the release has started every application. The function's
+       own application depends on this one, so it starts after it; polling the
+       Runtime API earlier would end Lambda's init phase and run the first
+       invocation against a half-started system;
+    2. start the `:httpc` profile and resolve the handler (initialisation — any
        failure here is reported to `/runtime/init/error` and halts the VM);
-    2. long-poll `GET /runtime/invocation/next`, which is where the sandbox is
+    3. long-poll `GET /runtime/invocation/next`, which is where the sandbox is
        frozen between invocations;
-    3. run the handler in a supervised task bounded by the invocation deadline;
-    4. post the result to `/response` or the failure to `/error`;
-    5. go back to step 2 with the VM still warm.
+    4. run the handler in a supervised task bounded by the invocation deadline;
+    5. post the result to `/response` or the failure to `/error`;
+    6. go back to step 3 with the VM still warm.
 
   Handler failures never crash this process, so a warm sandbox survives a bad
   invocation and the next one avoids a cold start.
@@ -29,6 +33,7 @@ defmodule AWS.Lambda.Runtime do
   # Left over so we can report a timeout ourselves before Lambda kills us.
   @deadline_grace_ms 500
   @backoff_ms 200
+  @boot_poll_ms 1
 
   ## Public functions
 
@@ -40,9 +45,12 @@ defmodule AWS.Lambda.Runtime do
   @doc """
   Entry point invoked by `start_link/1` through `Task.start_link/3`.
 
-  Not meant to be called directly — resolves the handler, then loops forever.
+  Not meant to be called directly — waits for the boot to complete, resolves
+  the handler, then loops forever.
   """
   def run(_opts) do
+    wait_for_boot()
+
     handler =
       try do
         :ok = API.setup()
@@ -60,6 +68,28 @@ defmodule AWS.Lambda.Runtime do
   end
 
   ## Private functions
+
+  # Boot
+
+  # The boot script ends with `{progress, started}`, which sets the provided
+  # status once every application, the function's own included, has started.
+  # The internal status only follows after the `-s`/`-eval` commands, and those
+  # include Elixir's CLI, which never returns under `mix test` or `iex -S mix`.
+  defp wait_for_boot do
+    case :init.get_status() do
+      {:stopping, _provided} ->
+        # The VM is shutting down, possibly because an application failed to
+        # start: there is nothing to serve.
+        Process.sleep(:infinity)
+
+      {_internal, :started} ->
+        :ok
+
+      {_internal, _provided} ->
+        Process.sleep(@boot_poll_ms)
+        wait_for_boot()
+    end
+  end
 
   # Loop
 
