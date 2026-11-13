@@ -16,7 +16,7 @@ Add `aws_lambda_runtime` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:aws_lambda_runtime, "~> 0.2.0"}
+    {:aws_lambda_runtime, "~> 0.3.0"}
   ]
 end
 ```
@@ -40,7 +40,7 @@ Add `aws_lambda_runtime` to `deps/0` in `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:aws_lambda_runtime, "~> 0.2.0"}
+    {:aws_lambda_runtime, "~> 0.3.0"}
   ]
 end
 ```

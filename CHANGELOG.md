@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-13
 
 ### Added
 
@@ -63,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Runtime API client is built on `:gen_tcp` (`AWS.Lambda.Runtime.HTTP`)
   instead of `:httpc`, so `:inets` is no longer started either. Handlers
   using `:httpc` must add `:inets` to their own `extra_applications`.
+
+[0.3.0]: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/v0.3.0
 
 ## [0.2.0] - 2026-11-10
 
