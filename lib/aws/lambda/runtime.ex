@@ -31,6 +31,7 @@ defmodule AWS.Lambda.Runtime do
 
   alias AWS.Lambda.Runtime.API
   alias AWS.Lambda.Runtime.Context
+  alias AWS.Lambda.Runtime.Events
   alias AWS.Lambda.Runtime.Handler
   alias AWS.Lambda.Runtime.Request
   alias AWS.Lambda.Runtime.Shutdown
@@ -250,6 +251,10 @@ defmodule AWS.Lambda.Runtime do
           {:error, message, request} ->
             Logger.info("bad request, not calling the handler: #{message}")
             respond(context, request, %{"message" => message}, status: 400)
+
+          {:malformed, message} ->
+            Logger.error("malformed event, not calling the handler: #{message}")
+            report(context, "Runtime.MalformedEvent", message, [])
         end
 
       {:error, reason} ->
@@ -264,17 +269,26 @@ defmodule AWS.Lambda.Runtime do
 
   # Dispatch
 
-  # handle/3 gets an HTTP request decoded, handler/2 the event as it is.
+  # handle/3 gets an HTTP request or a service's event decoded, handler/2 the
+  # event as it is.
   defp input(event, 3) do
     case Request.from_event(event) do
       {:ok, request} -> {:ok, request}
-      :error -> {:ok, event}
       {:error, message} -> {:error, message, %Request{event: event, format: format(event)}}
+      :error -> service_event(event)
     end
   end
 
   defp input(event, 2) do
     {:ok, event}
+  end
+
+  defp service_event(event) do
+    case Events.decode(event) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, message} -> {:malformed, message}
+      :error -> {:ok, event}
+    end
   end
 
   defp format(%{"version" => "2.0"}), do: :v2
@@ -417,6 +431,18 @@ defmodule AWS.Lambda.Runtime do
 
   defp reply({:returned, {:ok, body, opts}}, context, input) when is_list(opts) do
     respond(context, input, body, opts)
+  end
+
+  # Only the failed records of a batch are retried.
+  defp reply({:returned, {:retry, failed}}, context, input) do
+    case Events.batch_item_failures(failed) do
+      {:ok, response} ->
+        Logger.info("retrying #{length(response["batchItemFailures"])} record(s) of the batch")
+        respond(context, input, response, [])
+
+      {:error, message} ->
+        report(context, "Runtime.InvalidResponse", message, [])
+    end
   end
 
   defp reply({:returned, {:error, reason}}, context, _input) do

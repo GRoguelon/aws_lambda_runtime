@@ -42,8 +42,10 @@ defmodule AWS.Lambda.Runtime.Handler do
     * `c:handle/3` handles each invocation. The event is:
         * an `AWS.Lambda.Runtime.Request` for an HTTP request from a
           Function URL or API Gateway, with its body already decoded;
-        * the payload, decoded from JSON, for anything else: a direct
-          invocation, or an event from SQS, S3, EventBridge…
+        * the struct of an event from SQS, SNS, S3, EventBridge, Kinesis or
+          DynamoDB Streams, see `AWS.Lambda.Runtime.Events`;
+        * the payload, decoded from JSON, for anything else, such as a
+          direct invocation.
     * `c:terminate/2`, optional, is called with `:shutdown` when Lambda shuts
       the execution environment down. Implementing it is enough for Lambda
       to warn the runtime: see `AWS.Lambda.Runtime.Shutdown`.
@@ -62,6 +64,9 @@ defmodule AWS.Lambda.Runtime.Handler do
           JSON encoded.
     * `{:stream, chunks}` or `{:stream, chunks, opts}` - streams the response,
       see below.
+    * `{:retry, failed}` - for a batch from SQS, Kinesis or DynamoDB
+      Streams, has only the `failed` records retried, see
+      `AWS.Lambda.Runtime.Events`.
     * `{:error, reason}` - reported to Lambda as a function error.
     * anything else - JSON encoded and returned to the caller.
 

@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can't be decoded is answered with a `400`, a request no clause matches with
   a `404`, and another event no clause matches with a `Runtime.UnhandledEvent`
   error. `handler/2` is still supported.
+- `handle/3` receives events from SQS, SNS, S3, EventBridge, Kinesis and
+  DynamoDB Streams as structs (`AWS.Lambda.Runtime.Events`): S3 keys
+  URL-decoded, Kinesis data decoded from base64, DynamoDB images as plain
+  maps, timestamps as `DateTime`s. An event that can't be decoded is reported
+  as a `Runtime.MalformedEvent` error. `{:retry, failed}` has only the failed
+  records of an SQS, Kinesis or DynamoDB Streams batch retried.
 - `{:ok, body, opts}` sets the `:status`, `:headers` and `:cookies` of the
   HTTP response to a request, encoded as the Function URL or API Gateway
   expects it, and `:content_type` returns a binary body as is. Streams take

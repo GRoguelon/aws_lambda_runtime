@@ -80,6 +80,10 @@ defmodule AWS.Lambda.RuntimeTest do
       nested(Process.get(:not_set))
     end
 
+    def handle(%AWS.Lambda.Runtime.Events.SQS{records: messages}, _context, _state) do
+      {:retry, Enum.filter(messages, &(&1.body == "fail"))}
+    end
+
     def handle(%{"name" => name}, _context, state) do
       {:ok, "#{state.greeting} #{name}"}
     end
@@ -514,6 +518,29 @@ defmodule AWS.Lambda.RuntimeTest do
 
       assert headers["lambda-runtime-function-error-type"] == "Runtime.InvalidResponse"
       assert JSON.decode!(body)["errorMessage"] =~ "unknown response options: [:content_typ]"
+    end
+
+    @tag :capture_log
+    test "decodes a service's event and retries the failed records of a batch" do
+      records =
+        for {id, body} <- [{"m1", "ok"}, {"m2", "fail"}] do
+          %{"eventSource" => "aws:sqs", "messageId" => id, "body" => body}
+        end
+
+      {path, _headers, body} = invoke(%{"Records" => records})
+
+      assert path == "/2018-06-01/runtime/invocation/req-h/response"
+      assert JSON.decode!(body) == %{"batchItemFailures" => [%{"itemIdentifier" => "m2"}]}
+    end
+
+    @tag :capture_log
+    test "reports a service's event it can't decode without calling handle/3" do
+      record = %{"eventSource" => "aws:kinesis", "kinesis" => %{"data" => "%%%"}}
+
+      {_path, headers, body} = invoke(%{"Records" => [record]})
+
+      assert headers["lambda-runtime-function-error-type"] == "Runtime.MalformedEvent"
+      assert JSON.decode!(body)["errorMessage"] =~ "is not valid base64"
     end
 
     @tag :capture_log

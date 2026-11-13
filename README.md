@@ -134,16 +134,23 @@ end
   init phase, once every application has started, the function's own
   included: it can query an `Ecto.Repo` the application started. The state
   it returns is passed to every `handle/3`, which can't change it.
-- **`handle/3`** gets an `AWS.Lambda.Runtime.Request` for an HTTP request
-  from a Function URL or API Gateway, with its query string, cookies and body
-  already decoded (JSON and forms into maps), and the payload decoded from
-  JSON for anything else: a direct invocation, or an event from SQS, S3,
-  EventBridge…
+- **`handle/3`** gets the event ready to use:
+  - an `AWS.Lambda.Runtime.Request` for an HTTP request from a Function URL
+    or API Gateway, with its query string, cookies and body already decoded
+    (JSON and forms into maps);
+  - a struct for an event from SQS, SNS, S3, EventBridge, Kinesis or DynamoDB
+    Streams, such as `%AWS.Lambda.Runtime.Events.SQS{records: messages}`,
+    with S3 keys URL-decoded, Kinesis data decoded from base64 and DynamoDB
+    images as plain maps;
+  - the payload decoded from JSON for anything else, such as a direct
+    invocation.
 - **`terminate/2`**, optional, runs when Lambda shuts the execution
   environment down (see [Graceful shutdown](#graceful-shutdown)).
 
 It returns `{:ok, body}`, `{:ok, body, opts}`, `{:stream, chunks}` or
-`{:stream, chunks, opts}`, or `{:error, reason}` for a function error. For an
+`{:stream, chunks, opts}`, `{:retry, failed}` to have only the failed
+records of an SQS, Kinesis or DynamoDB Streams batch retried, or
+`{:error, reason}` for a function error. For an
 HTTP request, `opts` can set the response's `:status`, `:headers` and
 `:cookies`, and the runtime encodes it as the Function URL or API Gateway
 expects it. `:content_type` returns a binary body as is rather than in JSON.
