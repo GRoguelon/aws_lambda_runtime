@@ -20,7 +20,9 @@ export RELEASE_DISTRIBUTION=none
 export ERL_CRASH_DUMP=/dev/null
 export ERL_CRASH_DUMP_SECONDS=0
 
-export ELIXIR_ERL_OPTIONS="-noinput"
+# Keep flags set in the function's environment (e.g. +S, which then takes
+# precedence over the one env.sh derives from the memory size).
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:+$ELIXIR_ERL_OPTIONS }-noinput"
 
 RELEASE_SCRIPT="${LAMBDA_TASK_ROOT:-/var/task}/bin/lambda"
 

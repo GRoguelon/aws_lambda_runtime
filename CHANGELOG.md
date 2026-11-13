@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lambda allocates (`ceil(AWS_LAMBDA_FUNCTION_MEMORY_SIZE / 1769)`), instead
   of a fixed `+S 2:2`. It is set by `env.sh`; an `+S` in
   `ELIXIR_ERL_OPTIONS` takes precedence.
+- `bootstrap` appends `-noinput` to `ELIXIR_ERL_OPTIONS` instead of
+  overwriting it, so VM flags set in the function's environment are kept.
 
 ## [0.2.0] - 2026-11-10
 
