@@ -128,18 +128,21 @@ defmodule Mix.Tasks.AwsLambda.Build do
   end
 
   # Without a daemon every docker command fails, and `docker pull` would be
-  # reported as a missing image.
+  # reported as a missing image. Some Docker CLIs exit with 0 when the daemon
+  # can't be reached, printing the error instead of its version: the daemon
+  # is only reachable when it answered with one.
   defp ensure_docker_daemon! do
-    case System.cmd("docker", ["info", "--format", "{{.ServerVersion}}"], stderr_to_stdout: true) do
-      {_version, 0} ->
-        :ok
+    {output, status} =
+      System.cmd("docker", ["info", "--format", "{{.ServerVersion}}"], stderr_to_stdout: true)
 
-      {output, _status} ->
-        Mix.raise(
-          "cannot reach the Docker daemon, is Docker running? " <>
-            "docker info said: #{String.trim(output)}"
-        )
+    unless status == 0 and Regex.match?(~r/^\d+\.\d+\S*$/m, output) do
+      Mix.raise(
+        "cannot reach the Docker daemon, is Docker running? " <>
+          "docker info said: #{String.trim(output)}"
+      )
     end
+
+    :ok
   end
 
   # Docker's own error is printed above the raise, whatever the cause: a
