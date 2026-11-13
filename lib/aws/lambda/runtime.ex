@@ -36,6 +36,7 @@ defmodule AWS.Lambda.Runtime do
   alias AWS.Lambda.Runtime.Request
   alias AWS.Lambda.Runtime.Shutdown
   alias AWS.Lambda.Runtime.Telemetry
+  alias AWS.Lambda.Runtime.XRay
 
   ## Module attributes
 
@@ -91,7 +92,15 @@ defmodule AWS.Lambda.Runtime do
           %{handler: handler}
         )
 
-        %{handler: handler, state: state, function_url: function_url, cold_start: true}
+        %{
+          handler: handler,
+          state: state,
+          function_url: function_url,
+          concurrency: max_concurrency(),
+          # Shared by the pollers: only the environment's first invocation is
+          # a cold start.
+          cold_start: :atomics.new(1, [])
+        }
       catch
         kind, reason ->
           fail_init(kind, reason, __STACKTRACE__, halt)
@@ -104,8 +113,15 @@ defmodule AWS.Lambda.Runtime do
 
     Logger.info(
       "runtime ready, handler #{inspect(module)}.#{function}/#{arity}, " <>
-        "function URL mode #{setup.function_url}"
+        "function URL mode #{setup.function_url}, #{setup.concurrency} concurrent invocation(s)"
     )
+
+    # On Lambda Managed Instances, an execution environment takes several
+    # invocations at once, each poller one at a time. Linked: if one stops,
+    # they all restart with the runtime.
+    for _poller <- 2..setup.concurrency//1 do
+      spawn_link(fn -> loop(setup, halt, 0) end)
+    end
 
     loop(setup, halt, 0)
   end
@@ -135,6 +151,23 @@ defmodule AWS.Lambda.Runtime do
   end
 
   # Handler
+
+  # Lambda Managed Instances tell how many invocations an execution
+  # environment takes at once; standard Lambda, one, doesn't set it.
+  defp max_concurrency do
+    case Integer.parse(System.get_env("AWS_LAMBDA_MAX_CONCURRENCY", "1")) do
+      {concurrency, ""} when concurrency >= 1 ->
+        concurrency
+
+      _invalid ->
+        Logger.warning(
+          "AWS_LAMBDA_MAX_CONCURRENCY must be a positive integer, got: " <>
+            "#{inspect(System.get_env("AWS_LAMBDA_MAX_CONCURRENCY"))}, taking one invocation at a time"
+        )
+
+        1
+    end
+  end
 
   # How the function's URL, if any, invokes it: Lambda doesn't say, and each
   # mode only reads one kind of response.
@@ -240,13 +273,13 @@ defmodule AWS.Lambda.Runtime do
 
         Logger.metadata(request_id: context.request_id)
 
-        put_trace_id(context.trace_id)
+        if setup.concurrency == 1, do: put_trace_id(context.trace_id)
 
         setup
         |> process(context, raw_event)
         |> posted(halt)
 
-        loop(%{setup | cold_start: false}, halt, 0)
+        loop(setup, halt, 0)
 
       {:error, {:unexpected_status, status, body}} ->
         # The Runtime API answered: retrying won't change its mind.
@@ -296,7 +329,7 @@ defmodule AWS.Lambda.Runtime do
               context: context,
               handler: setup.handler,
               event_type: event_type(input),
-              cold_start: setup.cold_start
+              cold_start: :atomics.compare_exchange(setup.cold_start, 1, 0, 1) == :ok
             }
 
             start = invocation_started(metadata)
@@ -406,6 +439,7 @@ defmodule AWS.Lambda.Runtime do
     task =
       Task.Supervisor.async_nolink(AWS.Lambda.Runtime.TaskSupervisor, fn ->
         Logger.metadata(request_id: context.request_id)
+        XRay.put_trace_header(context.trace_id)
 
         # A stream is sent from this task, so the deadline below also bounds
         # the handler's enumerable. Failures are returned rather than let

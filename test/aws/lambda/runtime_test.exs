@@ -88,6 +88,15 @@ defmodule AWS.Lambda.RuntimeTest do
       {:ok, "#{state.greeting} #{name}"}
     end
 
+    # Waits to be let go, so invocations overlap.
+    def handle(%{"wait" => id}, _context, _state) do
+      send(test_pid(), {:waiting, id, self()})
+
+      receive do
+        :go -> {:ok, %{id: id, trace_header: AWS.Lambda.Runtime.XRay.trace_header()}}
+      end
+    end
+
     def handle(%{"raw" => text}, _context, _state) do
       {:ok, text, content_type: "text/plain"}
     end
@@ -710,6 +719,69 @@ defmodule AWS.Lambda.RuntimeTest do
 
       assert_received {:cold_start, true}
       assert_received {:cold_start, false}
+    end
+
+    @tag :capture_log
+    test "takes AWS_LAMBDA_MAX_CONCURRENCY invocations at once, each with its trace header" do
+      System.put_env("AWS_LAMBDA_MAX_CONCURRENCY", "2")
+      System.delete_env("_X_AMZN_TRACE_ID")
+      on_exit(fn -> System.delete_env("AWS_LAMBDA_MAX_CONCURRENCY") end)
+
+      test_pid = self()
+      invocations = :counters.new(1, [])
+
+      dispatch = fn
+        {"POST", "/2020-01-01/extension/register", _headers, _body} ->
+          {200, %{"lambda-extension-identifier" => "ext"}, "{}"}
+
+        {"GET", "/2020-01-01/extension/event/next", _headers, _body} ->
+          {500, %{}, "stop waiting"}
+
+        {"GET", _path, _headers, _body} ->
+          :counters.add(invocations, 1, 1)
+          n = :counters.get(invocations, 1)
+
+          {200,
+           %{
+             "lambda-runtime-aws-request-id" => "req-#{n}",
+             "lambda-runtime-trace-id" => "Root=1-00000000-00000000000000000000000#{n};Sampled=0"
+           }, ~s({"wait":#{n}})}
+
+        {"POST", path, _headers, body} ->
+          send(test_pid, {:posted, path, body})
+          {202, %{}, ""}
+      end
+
+      # Two spare steps: a poller that has posted asks for its next invocation
+      # at once, and must not take the other's post's place.
+      {_pid, endpoint} = FakeRuntimeAPI.start(List.duplicate(dispatch, 8))
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+      :persistent_term.erase({API, :endpoint})
+
+      runtime_pid = start_runtime!(halt: halt_fun())
+
+      # Both are being handled before either is let go.
+      assert_receive {:waiting, first, first_pid}, 1_000
+      assert_receive {:waiting, second, second_pid}, 1_000
+      assert Enum.sort([first, second]) == [1, 2]
+
+      send(first_pid, :go)
+      send(second_pid, :go)
+
+      for _invocation <- 1..2 do
+        assert_receive {:posted, "/2018-06-01/runtime/invocation/req-" <> n, body}, 1_000
+        n = String.trim_trailing(n, "/response")
+
+        assert %{"id" => id, "trace_header" => header} = JSON.decode!(body)
+        assert "#{id}" == n
+        assert header == "Root=1-00000000-00000000000000000000000#{n};Sampled=0"
+      end
+
+      # Several invocations at once can't share it.
+      assert System.get_env("_X_AMZN_TRACE_ID") == nil
+
+      stop_runtime(runtime_pid)
     end
 
     @tag :capture_log

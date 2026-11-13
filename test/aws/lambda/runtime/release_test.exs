@@ -140,6 +140,50 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
       refute render_env_sh(Release.lambda()) =~ "RELEASE_LAMBDA_HANDLER="
     end
 
+    @tag :tmp_dir
+    test "runs one scheduler per vCPU Lambda allocates", %{tmp_dir: tmp_dir} do
+      assert schedulers(tmp_dir, %{"AWS_LAMBDA_FUNCTION_MEMORY_SIZE" => "512"}) == "+S 1:1"
+      assert schedulers(tmp_dir, %{"AWS_LAMBDA_FUNCTION_MEMORY_SIZE" => "3008"}) == "+S 2:2"
+      assert schedulers(tmp_dir, %{"AWS_LAMBDA_FUNCTION_MEMORY_SIZE" => "10240"}) == "+S 6:6"
+    end
+
+    @tag :tmp_dir
+    test "leaves the scheduler count alone when it can't or mustn't derive it", %{
+      tmp_dir: tmp_dir
+    } do
+      assert schedulers(tmp_dir, %{}) == ""
+
+      assert schedulers(tmp_dir, %{
+               "AWS_LAMBDA_FUNCTION_MEMORY_SIZE" => "512",
+               "ELIXIR_ERL_OPTIONS" => "+S 3:3"
+             }) == "+S 3:3"
+
+      # Lambda Managed Instances: the vCPUs don't follow the memory size.
+      assert schedulers(tmp_dir, %{
+               "AWS_LAMBDA_FUNCTION_MEMORY_SIZE" => "4096",
+               "AWS_LAMBDA_MAX_CONCURRENCY" => "8"
+             }) == ""
+    end
+
+    # The ELIXIR_ERL_OPTIONS env.sh leaves, run by sh as the release does.
+    defp schedulers(tmp_dir, env) do
+      path = Path.join(tmp_dir, "env.sh")
+      File.write!(path, render_env_sh(Release.lambda()))
+
+      env =
+        Enum.map(
+          ~w[AWS_LAMBDA_FUNCTION_MEMORY_SIZE AWS_LAMBDA_MAX_CONCURRENCY ELIXIR_ERL_OPTIONS],
+          &{&1, Map.get(env, &1)}
+        )
+
+      {output, 0} =
+        System.cmd("sh", ["-c", ~s(. "$1"; printf %s "$ELIXIR_ERL_OPTIONS"), "sh", path],
+          env: env
+        )
+
+      output
+    end
+
     defp render_env_sh(options) do
       options[:rel_templates_path]
       |> Path.join("env.sh.eex")

@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each call to the handler, with its event type, cold start and result, and
   `[:aws_lambda_runtime, :init, :stop]` once `init/1` has run
   (`AWS.Lambda.Runtime.Telemetry`).
+- Lambda Managed Instances: the runtime handles `AWS_LAMBDA_MAX_CONCURRENCY`
+  invocations at once, sharing `init/1`'s state. Each invocation's trace
+  header is kept in the process handling it, where `AWS.Lambda.Runtime.XRay`
+  reads it first, and `_X_AMZN_TRACE_ID` is only set for one invocation at a
+  time. `env.sh` leaves the scheduler count to the VM there.
 - Graceful shutdown: functions registered with
   `AWS.Lambda.Runtime.Shutdown.register/1` run when Lambda shuts the
   execution environment down, before the VM stops its applications. The

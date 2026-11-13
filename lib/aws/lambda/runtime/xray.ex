@@ -22,7 +22,10 @@ defmodule AWS.Lambda.Runtime.XRay do
   A subsegment started while another is open in the same process is recorded
   as its child. Other processes don't see it, so a subsegment recorded from a
   `Task` is attached to the invocation's segment, unless it is given the
-  header of the one to attach to:
+  header of the one to attach to. On Lambda Managed Instances, which handle
+  several invocations at once, the invocation's trace header itself is only
+  known to the handler's process, so such a `Task` needs it to be traced at
+  all:
 
       XRay.subsegment("fetch_all", fn ->
         header = XRay.trace_header()
@@ -100,8 +103,11 @@ defmodule AWS.Lambda.Runtime.XRay do
 
   @stack_key {__MODULE__, :stack}
 
-  # Set by the runtime for each invocation.
+  # Set by the runtime for each invocation: in the handler's process, and, when
+  # it handles one invocation at a time, in the environment, as X-Ray SDKs
+  # expect it.
   @trace_env "_X_AMZN_TRACE_ID"
+  @trace_key {__MODULE__, :trace_header}
 
   @fields [:annotations, :metadata, :http, :sql, :aws]
 
@@ -255,6 +261,15 @@ defmodule AWS.Lambda.Runtime.XRay do
     end
   end
 
+  @doc false
+  # The invocation's trace header, for the process handling it: with several
+  # invocations at once, the environment variable can't tell which is whose.
+  @spec put_trace_header(String.t() | nil) :: :ok
+  def put_trace_header(header) do
+    Process.put(@trace_key, header)
+    :ok
+  end
+
   ## Private functions
 
   # Context
@@ -274,7 +289,7 @@ defmodule AWS.Lambda.Runtime.XRay do
   defp current_context do
     case stack() do
       [%{context: context} | _rest] -> context
-      [] -> @trace_env |> System.get_env() |> parse_trace_header()
+      [] -> (Process.get(@trace_key) || System.get_env(@trace_env)) |> parse_trace_header()
     end
   end
 

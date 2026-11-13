@@ -60,6 +60,19 @@ defmodule AWS.Lambda.Runtime.XRayTest do
       assert outer["parent_id"] == @parent
     end
 
+    test "takes the invocation's trace header from its process first", %{daemon: daemon} do
+      XRay.put_trace_header(
+        "Root=1-00000000-000000000000000000000001;Parent=0000000000000002;Sampled=1"
+      )
+
+      XRay.subsegment("work", fn -> :ok end)
+
+      assert %{
+               "trace_id" => "1-00000000-000000000000000000000001",
+               "parent_id" => "0000000000000002"
+             } = FakeXRayDaemon.receive_document(daemon)
+    end
+
     test "sends nothing when the invocation isn't sampled", %{daemon: daemon} do
       System.put_env("_X_AMZN_TRACE_ID", "Root=#{@root};Parent=#{@parent};Sampled=0")
 
