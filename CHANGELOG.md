@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `vm.args` no longer sets `+hms 1024`, which made every process start with a
   heap over four times the VM default (233 words). Set it through
   `ELIXIR_ERL_OPTIONS` if a handler benefits from it.
+- Releases boot in interactive mode (`RELEASE_MODE=interactive`, set by
+  `env.sh`), loading modules on first use instead of all at boot. Set
+  `RELEASE_MODE=embedded` on the function to restore preloading.
 - `:ssl` is no longer started: the Runtime API is plain HTTP, and starting
   `:ssl` (with `:crypto` and `:public_key`) only slowed the cold start.
   Handlers calling `:httpc` over HTTPS must add `:ssl` to their own

@@ -184,6 +184,11 @@ The release ships a `vm.args` tuned for Lambda: no scheduler busy waiting, no
 distribution, and one scheduler per vCPU Lambda allocates, derived from the
 function's memory size at start.
 
+It also boots in interactive mode, loading each module the first time it is
+called instead of all of them at boot, which shortens the init phase. Set the
+function's `RELEASE_MODE` environment variable to `embedded` to preload every
+module instead, so the first invocation doesn't pay for loading them.
+
 Any other [`erl` flag](https://www.erlang.org/doc/apps/erts/erl_cmd.html) can
 be added through the function's `ELIXIR_ERL_OPTIONS` environment variable,
 without rebuilding the package. For instance, a handler building large terms
