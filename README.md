@@ -171,19 +171,14 @@ aws lambda update-function-code --publish --function-name elixir-hello \
 
 ## Performance
 
-Rough numbers for the `HelloFunction` example above, deployed on arm64
-(Erlang 29.1.2, Elixir 1.20.5), medians of 20 cold starts per memory size:
+Rough numbers for the `HelloFunction` example above, deployed on arm64 with
+512MB of memory (Erlang 29.1.2, Elixir 1.20.5), medians of 20 cold starts:
 
-| Memory | Init | First invocation | Cold start |
-|---|---|---|---|
-| 256MB | ~770–870ms | ~230ms | ~1.1s |
-| 512MB | ~740ms | ~90ms | ~850ms |
-
-- **First invocation:** it loads the modules it uses, the release booting in
-  interactive mode (see [Tuning the VM](#tuning-the-vm)). With
-  `RELEASE_MODE=embedded`, the cold start at 256MB is ~1.3s.
+- **Cold start:** ~495ms — ~455ms of init, then ~40ms for the first
+  invocation, which loads the modules it uses, the release booting in
+  interactive mode (see [Tuning the VM](#tuning-the-vm)).
 - **Warm invocations:** ~2ms.
-- **Memory used:** ~85–90MB at both sizes.
+- **Memory used:** ~75MB.
 
 ## Tuning the VM
 
