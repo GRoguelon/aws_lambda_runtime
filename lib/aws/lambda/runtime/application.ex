@@ -2,8 +2,9 @@ defmodule AWS.Lambda.Runtime.Application do
   @moduledoc """
   OTP application entry point.
 
-  Supervises the `Task.Supervisor` that bounds handler invocations and the
-  `AWS.Lambda.Runtime` loop itself, one-for-one.
+  Applies the function's logging configuration (`AWS.Lambda.Runtime.Logging`),
+  then supervises the `Task.Supervisor` that bounds handler invocations and
+  the `AWS.Lambda.Runtime` loop itself, one-for-one.
 
   The runtime loop can be disabled with
 
@@ -20,6 +21,8 @@ defmodule AWS.Lambda.Runtime.Application do
   @doc "Starts the application supervision tree. Called by the OTP boot process."
   @impl Application
   def start(_type, _args) do
+    :ok = AWS.Lambda.Runtime.Logging.configure()
+
     children =
       [{Task.Supervisor, name: AWS.Lambda.Runtime.TaskSupervisor}] ++ runtime_child()
 

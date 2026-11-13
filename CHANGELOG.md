@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as it is produced. The `:http` option adds the status, headers and cookies
   of a Function URL in `RESPONSE_STREAM` mode; an error raised once streaming
   has started is reported in the stream's error trailers.
+- The function's logging configuration is applied: `AWS_LAMBDA_LOG_LEVEL`
+  sets `Logger`'s level in both log formats, over `config :logger, level:`
+  (with a warning when they differ), and `AWS_LAMBDA_LOG_FORMAT=JSON` writes
+  each entry as one line of JSON (`AWS.Lambda.Runtime.LogFormatter`) with its
+  timestamp, level, message, request ID and metadata.
 
 ### Fixed
 
@@ -30,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- In a release, `Logger`'s level defaults to `:info` instead of `:debug` when
+  neither `AWS_LAMBDA_LOG_LEVEL` nor `config :logger, level:` sets one.
 - The scheduler count follows the function's memory size, one per vCPU
   Lambda allocates (`ceil(AWS_LAMBDA_FUNCTION_MEMORY_SIZE / 1769)`), instead
   of a fixed `+S 2:2`. It is set by `env.sh`; an `+S` in
