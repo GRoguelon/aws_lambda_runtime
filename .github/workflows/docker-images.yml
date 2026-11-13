@@ -112,7 +112,10 @@ jobs:
           if gh release view "erlang-$OTP_VERSION" > /dev/null 2>&1; then
             gh release upload "erlang-$OTP_VERSION" out/*.zip --clobber
           else
+            # Layer releases never become the repository's "Latest" release,
+            # which stays the library's.
             gh release create "erlang-$OTP_VERSION" out/*.zip \
+              --latest=false \
               --target "$GITHUB_SHA" \
               --title "Erlang/OTP $OTP_VERSION" \
               --notes "AWS Lambda layers for Erlang/OTP $OTP_VERSION (amd64 and arm64). See the README for how to publish them."
