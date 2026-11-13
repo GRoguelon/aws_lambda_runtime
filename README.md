@@ -366,8 +366,9 @@ In the `Text` format, entries are written by `Logger`'s default formatter.
 ## Tracing with X-Ray
 
 With the function's tracing mode set to `Active`, Lambda records each
-sampled invocation in [X-Ray](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html):
-its init phase, the handler's run, and the runtime's overhead. The function's
+sampled invocation in [X-Ray](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html),
+in a segment for the function with the cold start's `Init` and the runtime's
+`Overhead`, but nothing of what the handler does. The function's
 role needs the `AWSXRayDaemonWriteAccess` managed policy, or the
 `xray:PutTraceSegments` and `xray:PutTelemetryRecords` permissions:
 
