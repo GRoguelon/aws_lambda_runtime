@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and records a raise, throw or exit as a fault. Nothing is sent unless the
   invocation is sampled. `trace_header/0` returns the header for a
   downstream call to join the trace.
+- `AWS.Lambda.Runtime.XRay.Telemetry` records subsegments from `:telemetry`
+  events: Ecto queries, Finch requests (Req's included) and
+  `:telemetry.span/3` calls. It is only compiled when the function depends on
+  `:telemetry`, an optional dependency.
 
 ### Fixed
 

@@ -61,6 +61,10 @@ defmodule AWS.Lambda.Runtime.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      # Only to compile AWS.Lambda.Runtime.XRay.Telemetry, when the function
+      # depends on it, as it does through Ecto, Finch or Req.
+      {:telemetry, "~> 1.0", optional: true},
+
       ## Dev
       {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true}
     ]

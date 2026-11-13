@@ -404,6 +404,34 @@ end
 Subsegments are sent over UDP to the X-Ray daemon Lambda runs in the sandbox,
 without waiting for it. Nothing is sent when the invocation isn't sampled.
 
+### From telemetry events
+
+When the function depends on [`:telemetry`](https://hex.pm/packages/telemetry),
+as it does through Ecto, Finch or Req, `AWS.Lambda.Runtime.XRay.Telemetry`
+records subsegments from the events these libraries emit, without wrapping
+each call. Attach it once, from the function's application:
+
+```elixir
+def start(_type, _args) do
+  AWS.Lambda.Runtime.XRay.Telemetry.attach(
+    ecto: [:hello_function, :repo],
+    finch: true,
+    spans: [[:hello_function, :checkout]]
+  )
+
+  Supervisor.start_link([HelloFunction.Repo], strategy: :one_for_one)
+end
+```
+
+- `ecto:` records each query of the repo with that telemetry prefix, with its
+  SQL but not its parameters.
+- `finch: true` records each HTTP request made with Finch or Req, with its
+  method, URL (without its query string) and response status.
+- `spans:` records each `:telemetry.span/3` call with one of these prefixes.
+
+`:telemetry` stays optional: the module is only compiled when the function
+depends on it.
+
 ## The AWS Layer for OTP
 
 Because releases are built with `include_erts: false`, the function package

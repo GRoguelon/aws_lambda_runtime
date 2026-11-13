@@ -67,6 +67,9 @@ defmodule AWS.Lambda.Runtime.XRay do
       `http: %{request: %{method: "GET", url: url}}`.
     * `:trace_header` - the trace header to attach the subsegment to, instead
       of the open subsegment or, outside of one, the invocation's.
+    * `:start_time` - when the subsegment started, if before this call, in
+      the `:native` time unit of `System.os_time/0`: for an event reporting
+      what it measured once done.
   """
   @type begin_option ::
           {:namespace, String.t() | atom()}
@@ -76,6 +79,7 @@ defmodule AWS.Lambda.Runtime.XRay do
           | {:sql, map()}
           | {:aws, map()}
           | {:trace_header, String.t() | nil}
+          | {:start_time, integer()}
 
   @typedoc """
   Options to end a subsegment: `:annotations`, `:metadata`, `:http`, `:sql`
@@ -134,7 +138,7 @@ defmodule AWS.Lambda.Runtime.XRay do
   """
   @spec begin_subsegment(String.t(), [begin_option()]) :: :ok
   def begin_subsegment(name, opts \\ []) when is_binary(name) do
-    opts = Keyword.validate!(opts, [:namespace, :trace_header | @fields])
+    opts = Keyword.validate!(opts, [:namespace, :trace_header, :start_time | @fields])
 
     context =
       case Keyword.fetch(opts, :trace_header) do
@@ -154,7 +158,7 @@ defmodule AWS.Lambda.Runtime.XRay do
               "trace_id" => root,
               "parent_id" => parent_id,
               "type" => "subsegment",
-              "start_time" => now()
+              "start_time" => start_time(opts[:start_time])
             }
             |> put_namespace(opts[:namespace])
             |> put_fields(opts)
@@ -437,6 +441,14 @@ defmodule AWS.Lambda.Runtime.XRay do
   # would have to be started for this alone.
   defp new_id do
     8 |> :rand.bytes() |> Base.encode16(case: :lower)
+  end
+
+  defp start_time(nil) do
+    now()
+  end
+
+  defp start_time(os_time) when is_integer(os_time) do
+    System.convert_time_unit(os_time, :native, :microsecond) / 1_000_000
   end
 
   # Seconds since the epoch, with microseconds.
