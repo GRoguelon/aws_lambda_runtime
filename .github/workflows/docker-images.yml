@@ -118,7 +118,7 @@ jobs:
               --latest=false \
               --target "$GITHUB_SHA" \
               --title "Erlang/OTP $OTP_VERSION" \
-              --notes "AWS Lambda layers for Erlang/OTP $OTP_VERSION (amd64 and arm64). See the README for how to publish them."
+              --notes "AWS Lambda layers for Erlang/OTP $OTP_VERSION (amd64 and arm64). See https://github.com/GRoguelon/aws_lambda_runtime/blob/main/guides/deployment.md for how to publish them."
           fi
 
       # Last, as plan-builds.sh treats the multi-arch tag as "done".

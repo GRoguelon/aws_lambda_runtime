@@ -6,6 +6,22 @@ defmodule AWS.Lambda.Runtime.Context do
   This is the second argument passed to your handler.
   """
 
+  ## Types
+
+  @type t :: %__MODULE__{
+          request_id: String.t() | nil,
+          deadline_ms: integer() | nil,
+          invoked_function_arn: String.t() | nil,
+          trace_id: String.t() | nil,
+          client_context: map() | nil,
+          identity: map() | nil,
+          function_name: String.t() | nil,
+          function_version: String.t() | nil,
+          memory_limit_mb: integer() | nil,
+          log_group: String.t() | nil,
+          log_stream: String.t() | nil
+        }
+
   ## Module attributes
 
   defstruct [

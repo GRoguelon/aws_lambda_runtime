@@ -51,7 +51,23 @@ defmodule AWS.Lambda.Runtime.MixProject do
     [
       formatters: ["html"],
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md"],
+      extras: [
+        "README.md",
+        "guides/getting-started.md",
+        "guides/handlers.md",
+        "guides/http.md",
+        "guides/events.md",
+        "guides/streaming.md",
+        "guides/deployment.md",
+        "guides/logging.md",
+        "guides/xray.md",
+        "guides/metrics.md",
+        "guides/graceful-shutdown.md",
+        "guides/managed-instances.md",
+        "guides/performance.md",
+        "CHANGELOG.md"
+      ],
+      groups_for_extras: [Guides: ~r"guides/"],
       source_ref: "v#{@version}",
       source_url: @source_url,
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"]
