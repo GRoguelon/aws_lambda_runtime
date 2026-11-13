@@ -5,6 +5,12 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
 
   alias AWS.Lambda.Runtime.Release
 
+  defmodule TestHandler do
+    @moduledoc false
+    def handler(event, _context), do: event
+    def process(event, _context), do: event
+  end
+
   describe "lambda/1" do
     test "returns the Lambda defaults" do
       release = Release.lambda()
@@ -64,6 +70,43 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
       assert is_function(strip_iex, 1)
     end
 
+    test "stores the handler as a handler string" do
+      assert Release.lambda(handler: TestHandler)[:aws_lambda_runtime] ==
+               [handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler.handler"]
+
+      assert Release.lambda(handler: {TestHandler, :process})[:aws_lambda_runtime] ==
+               [handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler.process"]
+
+      assert Release.lambda(handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler")[
+               :aws_lambda_runtime
+             ] == [handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler.handler"]
+
+      refute Keyword.has_key?(Release.lambda(), :aws_lambda_runtime)
+      refute Keyword.has_key?(Release.lambda(handler: TestHandler), :handler)
+    end
+
+    test "raises when the handler doesn't exist" do
+      assert_raise ArgumentError, ~r/NoSuch.Handler.handler\/2 doesn't exist/, fn ->
+        Release.lambda(handler: NoSuch.Handler)
+      end
+
+      assert_raise ArgumentError, ~r/TestHandler.missing\/2 doesn't exist/, fn ->
+        Release.lambda(handler: {TestHandler, :missing})
+      end
+    end
+
+    test "adds bundle_shared_libs/1 after :assemble when ERTS is included" do
+      bundle = &Release.bundle_shared_libs/1
+
+      assert Release.lambda(include_erts: true)[:steps] == [:assemble, bundle]
+      assert Release.lambda(include_erts: "/path/to/erts")[:steps] == [:assemble, bundle]
+
+      assert [strip_iex, :assemble, ^bundle, :tar] =
+               Release.lambda(include_erts: true, strip_iex: true, after_steps: [:tar])[:steps]
+
+      assert is_function(strip_iex, 1)
+    end
+
     test "raises when before_steps isn't a list" do
       assert_raise ArgumentError, ~r/`before_steps` must be a list, got: :tar/, fn ->
         Release.lambda(before_steps: :tar)
@@ -73,6 +116,52 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
     test "raises when after_steps isn't a list" do
       assert_raise ArgumentError, ~r/`after_steps` must be a list, got: :tar/, fn ->
         Release.lambda(after_steps: :tar)
+      end
+    end
+  end
+
+  describe "env.sh" do
+    test "exports the release's handler" do
+      env_sh = render_env_sh(Release.lambda(handler: TestHandler))
+
+      assert env_sh =~
+               ~s(export RELEASE_LAMBDA_HANDLER="AWS.Lambda.Runtime.ReleaseTest.TestHandler.handler")
+    end
+
+    test "exports no handler when the release has none" do
+      refute render_env_sh(Release.lambda()) =~ "RELEASE_LAMBDA_HANDLER="
+    end
+
+    defp render_env_sh(options) do
+      options[:rel_templates_path]
+      |> Path.join("env.sh.eex")
+      |> EEx.eval_file(assigns: [release: %{options: options}])
+    end
+  end
+
+  describe "bundle_shared_libs/2" do
+    @describetag :tmp_dir
+
+    test "copies the shared libraries into the release's lib", %{tmp_dir: tmp_dir} do
+      source = Path.join(tmp_dir, "opt-lib")
+      release = %{path: Path.join(tmp_dir, "rel")}
+
+      File.mkdir_p!(Path.join(source, "subdir"))
+      File.mkdir_p!(Path.join(release.path, "lib"))
+      File.write!(Path.join(source, "libcrypto.so.3"), "crypto")
+      File.write!(Path.join(source, "libtinfo.so.6"), "tinfo")
+
+      assert Release.bundle_shared_libs(release, source) == release
+
+      assert release.path |> Path.join("lib") |> File.ls!() |> Enum.sort() ==
+               ["libcrypto.so.3", "libtinfo.so.6"]
+
+      assert File.read!(Path.join(release.path, "lib/libcrypto.so.3")) == "crypto"
+    end
+
+    test "raises outside of the builder image", %{tmp_dir: tmp_dir} do
+      assert_raise ArgumentError, ~r/mix aws_lambda.build/, fn ->
+        Release.bundle_shared_libs(%{path: tmp_dir}, Path.join(tmp_dir, "missing"))
       end
     end
   end

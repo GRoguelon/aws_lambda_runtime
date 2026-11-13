@@ -13,13 +13,26 @@ defmodule AWS.Lambda.Runtime.Handler do
   letter or underscore it is taken as the function name, otherwise the whole
   string is the module and `handler/2` is assumed.
 
-  The handler can also be set in the application config, as a module, a
-  `{module, function}` pair or a handler string:
+  ## Where the handler comes from
 
-      config :aws_lambda_runtime, :handler, {MyLambda.Handler, :process}
+  The first one set of:
 
-  The config takes precedence over `_HANDLER`, so the function's *Handler*
-  setting is then ignored. Handy for local testing.
+    1. the `:handler` option of `AWS.Lambda.Runtime.Release.lambda/1`, built
+       into the release:
+
+           releases: [lambda: fn -> AWS.Lambda.Runtime.Release.lambda(handler: MyLambda.Handler) end]
+
+    2. the application config, as a module, a `{module, function}` pair or a
+       handler string. Handy for local testing:
+
+           config :aws_lambda_runtime, :handler, {MyLambda.Handler, :process}
+
+    3. the function's *Handler* setting, which Lambda passes as `_HANDLER`.
+       It lets one package serve several functions, each with its own
+       handler.
+
+  Lambda requires a *Handler* setting even when the handler comes from the
+  release or the config: any value then does.
 
   ## Return values
 
@@ -86,11 +99,12 @@ defmodule AWS.Lambda.Runtime.Handler do
   """
   def resolve!() do
     spec =
-      Application.get_env(:aws_lambda_runtime, :handler) ||
+      System.get_env("RELEASE_LAMBDA_HANDLER") ||
+        Application.get_env(:aws_lambda_runtime, :handler) ||
         System.get_env("_HANDLER") ||
         raise ArgumentError,
-              "no handler configured: set the function's Handler property or " <>
-                "config :aws_lambda_runtime, :handler"
+              "no handler configured: set the function's Handler property, " <>
+                "config :aws_lambda_runtime, :handler or the release's handler: option"
 
     {module, function} = parse!(spec)
 

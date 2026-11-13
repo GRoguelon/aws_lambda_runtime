@@ -68,8 +68,8 @@ end
 
 `AWS.Lambda.Runtime.Release.lambda/1` returns the release options Lambda's
 `provided.al2023` runtime needs: `include_erts: false` because ERTS comes from
-the Lambda layer (see below), plus the `bootstrap` entrypoint and the
-`vm.args`/`env.sh` files copied into the package. The anonymous function defers
+the [OTP layer](#the-aws-layer-for-otp) by default, plus the `bootstrap`
+entrypoint and the `vm.args`/`env.sh` files copied into the package. The anonymous function defers
 the call until `mix release` runs, once `:aws_lambda_runtime` is compiled and
 loaded. The release must be named `lambda`, as `bootstrap` starts
 `bin/lambda`.
@@ -77,13 +77,20 @@ loaded. The release must be named `lambda`, as `bootstrap` starts
 Any `mix release` option given to `lambda/1` overrides its defaults, and it
 accepts a few options of its own:
 
+- `handler:` sets the function's handler (see step 3).
+- `include_erts: true` embeds ERTS in the package, so the function needs no
+  OTP layer (see [Embedding ERTS](#embedding-erts-instead-of-the-otp-layer)).
 - `strip_iex: true` removes IEx from the release, for a smaller package.
 - `before_steps:` and `after_steps:` add steps before and after the others.
 
 ```elixir
 releases: [
   lambda: fn ->
-    AWS.Lambda.Runtime.Release.lambda(strip_iex: true, after_steps: [:tar])
+    AWS.Lambda.Runtime.Release.lambda(
+      handler: HelloFunction,
+      strip_iex: true,
+      after_steps: [:tar]
+    )
   end
 ]
 ```
@@ -114,20 +121,32 @@ defmodule HelloFunction do
 end
 ```
 
-Lambda passes the function's *Handler* setting to the runtime, which calls
-the module it names: `HelloFunction` (calls `handler/2`) or
-`HelloFunction.some_function` — see the `AWS.Lambda.Runtime.Handler`
-moduledoc for every accepted format. It is set when creating the function in
-step 5.
+The runtime calls the first handler set of:
 
-The handler can be set in `config/config.exs` instead, which takes precedence
-over the *Handler* setting:
+1. the release's `handler:` option, checked when the release is built, so a
+   typo fails the build rather than the cold start:
 
-```elixir
-import Config
+   ```elixir
+   releases: [lambda: fn -> AWS.Lambda.Runtime.Release.lambda(handler: HelloFunction) end]
+   ```
 
-config :aws_lambda_runtime, handler: HelloFunction
-```
+2. the application config:
+
+   ```elixir
+   import Config
+
+   config :aws_lambda_runtime, handler: HelloFunction
+   ```
+
+3. the function's *Handler* setting, set when creating the function in
+   step 5. As it is read at each cold start, one package can serve several
+   functions, each with its own handler.
+
+Each takes a module, `HelloFunction` (calls `handler/2`), or a function,
+`{HelloFunction, :some_function}` or `HelloFunction.some_function` as a
+string: see the `AWS.Lambda.Runtime.Handler` moduledoc for every accepted
+format. Lambda requires a *Handler* setting even when the handler comes from
+the release or the config: any value then does.
 
 ### 4. Build and deploy
 
@@ -160,8 +179,10 @@ aws lambda create-function \
 
 Replace the role ARN with your own, and the layer ARN with the one printed
 when publishing the layer. `--architectures` (`arm64` or `x86_64`) must match
-the layer's. On subsequent deploys, update the function code instead of
-recreating it:
+the layer's. A release built with `include_erts: true` needs no layer: drop
+`--layers`, and match `--architectures` to `mix aws_lambda.build`'s
+`--platform` (`linux/arm64` by default). On subsequent deploys, update the
+function code instead of recreating it:
 
 ```sh
 aws lambda update-function-code --publish --function-name elixir-hello \
@@ -458,12 +479,43 @@ end
 `:telemetry` stays optional: the module is only compiled when the function
 depends on it.
 
+## Embedding ERTS instead of the OTP layer
+
+With `include_erts: true`, the package carries the Erlang runtime system
+itself, and the function needs no layer:
+
+```elixir
+releases: [
+  lambda: fn ->
+    AWS.Lambda.Runtime.Release.lambda(handler: HelloFunction, include_erts: true)
+  end
+]
+```
+
+The release then also carries the shared libraries the OTP layer ships
+alongside ERTS and the Lambda sandbox lacks (`libcrypto`, `libssl`,
+`libtinfo`, `libstdc++`…), in its `lib/` directory, which Lambda puts on
+`LD_LIBRARY_PATH`. Both come from the builder image, so the release must be
+built with `mix aws_lambda.build`: built elsewhere, say with `mix release` on
+macOS, it would embed an ERTS that can't run on Lambda, and the build stops
+with an error.
+
+Which one to pick:
+
+- **Embedded ERTS:** one artifact, and no layer to publish in each region and
+  account, nor to keep in step with the OTP version the release is built
+  with. The package is larger, and uploaded on every deploy: for a function
+  using Req, 12MB instead of 2MB (30MB unzipped), with the same init phase,
+  about 500ms on arm64 with 512MB of memory.
+- **OTP layer:** smaller packages and faster deploys, the layer being shared
+  by every function using the same OTP version.
+
 ## The AWS Layer for OTP
 
-Because releases are built with `include_erts: false`, the function package
-only ships Elixir and your own code — the Erlang/OTP runtime itself must come
-from a Lambda layer mounted at `/opt/otp`, matching the OTP version the
-release was built against.
+Unless the release embeds ERTS, the function package only ships Elixir and
+your own code — the Erlang/OTP runtime itself must come from a Lambda layer
+mounted at `/opt/otp`, matching the OTP version the release was built
+against.
 
 Prebuilt layer zips are published as GitHub release assets (see
 [`docker/erlang`](docker/erlang/README.md) for how they're built). Available

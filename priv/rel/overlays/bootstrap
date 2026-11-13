@@ -3,8 +3,10 @@
 # entrypoint of a `provided.al2023` function.
 set -e
 
-# The ERTS layer is unpacked at /opt. The release was built with
-# `include_erts: false`, so the boot script picks up `erl` from PATH.
+# Built with `include_erts: false`, the release picks up `erl` from PATH, so
+# from the OTP layer unpacked at /opt. With `include_erts: true` it runs its
+# own ERTS, its shared libraries in lib/ (on Lambda's LD_LIBRARY_PATH), and
+# this is unused.
 export PATH="/opt/otp/bin:$PATH"
 
 # /var/task and /opt are read only; /tmp is the only writable location. The

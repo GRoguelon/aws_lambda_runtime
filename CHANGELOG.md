@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:telemetry`, an optional dependency.
 - `AWS.Lambda.Runtime.XRay.update_subsegment/1` merges annotations,
   metadata and the `http`, `sql` and `aws` fields into the open subsegment.
+- `AWS.Lambda.Runtime.Release.lambda/1` takes a `handler:` option, checked
+  when the release is built. It takes precedence over
+  `config :aws_lambda_runtime, :handler`, itself over the function's
+  *Handler* setting.
+- Releases built with `include_erts: true` run without the OTP layer:
+  `AWS.Lambda.Runtime.Release.bundle_shared_libs/1`, added after `:assemble`,
+  copies the shared libraries the layer provides (`libcrypto`, `libssl`,
+  `libtinfo`…) into the release.
 
 ### Fixed
 

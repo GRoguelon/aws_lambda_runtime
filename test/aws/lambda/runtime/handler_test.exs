@@ -51,9 +51,22 @@ defmodule AWS.Lambda.Runtime.HandlerTest do
       on_exit(fn ->
         Application.delete_env(:aws_lambda_runtime, :handler)
         System.delete_env("_HANDLER")
+        System.delete_env("RELEASE_LAMBDA_HANDLER")
       end)
 
       :ok
+    end
+
+    test "prefers the release's handler over the config and _HANDLER" do
+      System.put_env(
+        "RELEASE_LAMBDA_HANDLER",
+        "AWS.Lambda.Runtime.HandlerTest.TestHandler.not_a_handler"
+      )
+
+      Application.put_env(:aws_lambda_runtime, :handler, {TestHandler, :handler})
+      System.put_env("_HANDLER", "SomeOther.Module")
+
+      assert Handler.resolve!() == {TestHandler, :not_a_handler}
     end
 
     test "prefers the compile-time config over _HANDLER" do
