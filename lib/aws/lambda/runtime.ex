@@ -18,6 +18,11 @@ defmodule AWS.Lambda.Runtime do
 
   Handler failures never crash this process, so a warm sandbox survives a bad
   invocation and the next one avoids a cold start.
+
+  Runtime API failures are different: as its contract requires, the VM exits
+  when `/next` answers with an error status, when posting a result gets a
+  `500` (container error), or when `/next` stays unreachable after a few
+  attempts, so that Lambda replaces the sandbox.
   """
 
   use Task, restart: :permanent
@@ -33,11 +38,19 @@ defmodule AWS.Lambda.Runtime do
   # Left over so we can report a timeout ourselves before Lambda kills us.
   @deadline_grace_ms 500
   @backoff_ms 200
+  @max_next_attempts 5
   @boot_poll_ms 1
 
   ## Public functions
 
-  @doc "Starts the runtime loop as a supervised, permanently-restarted `Task`."
+  @doc """
+  Starts the runtime loop as a supervised, permanently-restarted `Task`.
+
+  ## Options
+
+    * `:halt` - function called with the exit status when a Runtime API
+      failure requires the VM to exit. Defaults to `System.halt/1`.
+  """
   def start_link(opts \\ []) do
     Task.start_link(__MODULE__, :run, [opts])
   end
@@ -48,7 +61,9 @@ defmodule AWS.Lambda.Runtime do
   Not meant to be called directly — waits for the boot to complete, resolves
   the handler, then loops forever.
   """
-  def run(_opts) do
+  def run(opts) do
+    halt = Keyword.get(opts, :halt, &System.halt/1)
+
     wait_for_boot()
 
     handler =
@@ -64,7 +79,7 @@ defmodule AWS.Lambda.Runtime do
 
     Logger.info("runtime ready, handler #{inspect(module)}.#{function}/2")
 
-    loop(handler)
+    loop(handler, halt, 0)
   end
 
   ## Private functions
@@ -93,7 +108,7 @@ defmodule AWS.Lambda.Runtime do
 
   # Loop
 
-  defp loop(handler) do
+  defp loop(handler, halt, failures) do
     case API.next_invocation() do
       {:ok, headers, raw_event} ->
         context = Context.from_headers(headers)
@@ -102,17 +117,45 @@ defmodule AWS.Lambda.Runtime do
 
         put_trace_id(context.trace_id)
 
-        process(handler, context, raw_event)
+        handler
+        |> process(context, raw_event)
+        |> posted(halt)
 
-      {:error, reason} ->
-        # A failure here is either a transient socket error or the sandbox
-        # shutting down. Back off slightly instead of hot-looping.
+        loop(handler, halt, 0)
+
+      {:error, {:unexpected_status, status, body}} ->
+        # The Runtime API answered: retrying won't change its mind.
+        fatal(halt, "the Runtime API answered the next invocation with #{status}: #{body}")
+
+      {:error, reason} when failures + 1 < @max_next_attempts ->
+        # Possibly a transient socket error: back off instead of hot-looping.
         Logger.error("could not fetch the next invocation: #{inspect(reason)}")
 
         Process.sleep(@backoff_ms)
-    end
 
-    loop(handler)
+        loop(handler, halt, failures + 1)
+
+      {:error, reason} ->
+        fatal(halt, "could not fetch the next invocation: #{inspect(reason)}")
+    end
+  end
+
+  defp posted({_kind, :ok}, _halt) do
+    :ok
+  end
+
+  defp posted({kind, {:error, {:unexpected_status, 500, body}}}, halt) do
+    fatal(halt, "the Runtime API answered the invocation #{kind} with 500: #{body}")
+  end
+
+  defp posted({kind, {:error, reason}}, _halt) do
+    Logger.error("could not post the invocation #{kind}: #{inspect(reason)}")
+  end
+
+  defp fatal(halt, message) do
+    Logger.error(message <> ", exiting")
+    Logger.flush()
+    halt.(1)
   end
 
   defp process({module, function}, context, raw_event) do
@@ -207,7 +250,7 @@ defmodule AWS.Lambda.Runtime do
   defp respond(context, payload) do
     case encode(payload) do
       {:ok, body} ->
-        log_failure("response", API.invocation_response(context.request_id, body))
+        {"response", API.invocation_response(context.request_id, body)}
 
       {:error, message} ->
         report(context, "Runtime.UnserializableResult", message, [])
@@ -221,15 +264,7 @@ defmodule AWS.Lambda.Runtime do
       "stackTrace" => Enum.map(stacktrace, &Exception.format_stacktrace_entry/1)
     }
 
-    log_failure("error", API.invocation_error(context.request_id, payload, type))
-  end
-
-  defp log_failure(_kind, :ok) do
-    :ok
-  end
-
-  defp log_failure(kind, {:error, reason}) do
-    Logger.error("could not post the invocation #{kind}: #{inspect(reason)}")
+    {"error", API.invocation_error(context.request_id, payload, type)}
   end
 
   # Initialisation failure

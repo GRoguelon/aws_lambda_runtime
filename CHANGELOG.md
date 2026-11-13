@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the function's own application, so the first invocation could reach a
   handler whose dependencies were not started yet, and their start-up was
   counted in the invocation instead of Lambda's init phase.
+- The VM exits, as the Runtime API contract requires, when
+  `GET /runtime/invocation/next` is answered with an error status, when it
+  fails five times in a row, or when posting a result is answered with a
+  `500` container error. It used to retry `/next` every 200 ms until the
+  function timed out.
 
 ### Changed
 

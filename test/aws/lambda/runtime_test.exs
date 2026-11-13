@@ -138,9 +138,62 @@ defmodule AWS.Lambda.RuntimeTest do
     stop_runtime(runtime_pid)
   end
 
-  defp start_runtime! do
-    {:ok, pid} = AWS.Lambda.Runtime.start_link([])
+  @tag :capture_log
+  test "exits when the next invocation is answered with an error status" do
+    {_pid, endpoint} =
+      FakeRuntimeAPI.start([
+        fn {"GET", _path, _headers, _body} -> {500, %{}, "container error"} end
+      ])
+
+    System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+    runtime_pid = start_runtime!(halt: halt_fun())
+
+    assert_receive {:halted, 1}, 1_000
+    assert_receive {:EXIT, ^runtime_pid, :normal}, 1_000
+  end
+
+  @tag :capture_log
+  test "exits when the Runtime API stays unreachable" do
+    # No steps: the fake server closes its socket, so every connection fails.
+    {_pid, endpoint} = FakeRuntimeAPI.start([])
+
+    System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+    runtime_pid = start_runtime!(halt: halt_fun())
+
+    assert_receive {:halted, 1}, 2_000
+    assert_receive {:EXIT, ^runtime_pid, :normal}, 1_000
+  end
+
+  @tag :capture_log
+  test "exits when posting the response is answered with a container error" do
+    {_pid, endpoint} =
+      FakeRuntimeAPI.start([
+        fn {"GET", _path, _headers, _body} ->
+          {200, %{"lambda-runtime-aws-request-id" => "req-5"}, ~s({"mode":"ok"})}
+        end,
+        fn {"POST", _path, _headers, _body} -> {500, %{}, "container error"} end
+      ])
+
+    System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+    runtime_pid = start_runtime!(halt: halt_fun())
+
+    assert_receive {:halted, 1}, 1_000
+
+    stop_runtime(runtime_pid)
+  end
+
+  defp start_runtime!(opts \\ []) do
+    {:ok, pid} = AWS.Lambda.Runtime.start_link(opts)
     pid
+  end
+
+  # Stands in for System.halt/1, which would stop the test VM.
+  defp halt_fun do
+    test_pid = self()
+    fn status -> send(test_pid, {:halted, status}) end
   end
 
   defp stop_runtime(pid) do
