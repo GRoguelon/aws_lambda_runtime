@@ -358,7 +358,7 @@ aws lambda update-function-configuration --function-name elixir-hello \
   stays a single CloudWatch Logs event.
 
 ```json
-{"level":"INFO","message":"two\nlines","requestId":"8f5…","timestamp":"2026-11-13T15:49:52.683Z","user_id":42}
+{"level":"INFO","message":"two\nlines","mfa":"MyApp.Handler.handler/2","requestId":"8f5…","timestamp":"2026-11-13T15:49:52.683Z","user_id":42}
 ```
 
 In the `Text` format, entries are written by `Logger`'s default formatter.

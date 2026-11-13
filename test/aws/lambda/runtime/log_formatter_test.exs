@@ -49,9 +49,15 @@ defmodule AWS.Lambda.Runtime.LogFormatterTest do
       assert fields["line"] == 12
       assert fields["user_id"] == 42
       assert fields["tenant"] == "acme"
+      assert fields["mfa"] == "MyApp.Handler.handler/2"
       refute Map.has_key?(fields, "pid")
-      refute Map.has_key?(fields, "mfa")
       refute Map.has_key?(fields, "gl")
+    end
+
+    test "writes an Erlang mfa like Elixir does" do
+      fields = decode(format(%{msg: {:string, "hi"}, meta: %{mfa: {:lists, :map, 2}}}))
+
+      assert fields["mfa"] == ":lists.map/2"
     end
 
     test "inspects metadata JSON can't represent" do

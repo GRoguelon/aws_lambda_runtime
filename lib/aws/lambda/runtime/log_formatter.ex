@@ -3,12 +3,13 @@ defmodule AWS.Lambda.Runtime.LogFormatter do
   `:logger` formatter writing each log event as one line of JSON, the format
   Lambda expects when the function's log format is `JSON`.
 
-      {"timestamp":"2026-11-13T15:41:03.123Z","level":"INFO","requestId":"8f5…","message":"hello","module":"MyApp","line":12}
+      {"timestamp":"2026-11-13T15:41:03.123Z","level":"INFO","requestId":"8f5…","message":"hello","mfa":"MyApp.Handler.handler/2","file":"lib/my_app/handler.ex","line":12}
 
   `timestamp`, `level`, `message` and, during an invocation, `requestId` are
   always present; the event's metadata follows, minus the VM's internal keys
-  (pid, group leader, `mfa`…). A multi-line message, such as a stack trace,
-  stays on one line, so it is a single CloudWatch Logs event.
+  (pid, group leader…). `mfa`, where the event was logged, reads as Elixir
+  writes it. A multi-line message, such as a stack trace, stays on one line,
+  so it is a single CloudWatch Logs event.
 
   Installed by `AWS.Lambda.Runtime.Logging.configure/1`; it can also be set
   explicitly:
@@ -24,7 +25,6 @@ defmodule AWS.Lambda.Runtime.LogFormatter do
     :time,
     :gl,
     :pid,
-    :mfa,
     :domain,
     :report_cb,
     :error_logger,
@@ -103,8 +103,18 @@ defmodule AWS.Lambda.Runtime.LogFormatter do
 
   defp metadata(meta) do
     for {key, value} <- meta, key not in @internal_metadata, into: %{} do
-      {Atom.to_string(key), json_value(value)}
+      {Atom.to_string(key), metadata_value(key, value)}
     end
+  end
+
+  # "AWS.Lambda.Runtime.run/1" rather than an inspected tuple.
+  defp metadata_value(:mfa, {module, function, arity})
+       when is_atom(module) and is_atom(function) and is_integer(arity) do
+    Exception.format_mfa(module, function, arity)
+  end
+
+  defp metadata_value(_key, value) do
+    json_value(value)
   end
 
   # Metadata can hold any term: keep what JSON represents as is, inspect the
