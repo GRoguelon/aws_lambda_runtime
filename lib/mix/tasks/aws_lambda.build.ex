@@ -14,8 +14,9 @@ defmodule Mix.Tasks.AwsLambda.Build do
 
   ## What it does
 
-    1. Pulls the `ghcr.io/groguelon/lambda-layer-elixir:<elixir>-erlang-<erlang>-arm64`
-       image, erroring out if no image matches the given versions.
+    1. Checks that the Docker daemon is reachable, then pulls the
+       `ghcr.io/groguelon/lambda-layer-elixir:<elixir>-erlang-<erlang>` image
+       for `--platform`, erroring out with Docker's error if it can't.
     2. Creates a container from that image.
     3. Installs `tar` (and any `--dep` packages) in the container via `dnf`
        (the image doesn't ship with `tar`).
@@ -73,6 +74,7 @@ defmodule Mix.Tasks.AwsLambda.Build do
 
     ensure_executable!("docker")
     ensure_executable!("tar")
+    ensure_docker_daemon!()
 
     app_root = File.cwd!()
     app_name = Path.basename(app_root)
@@ -125,6 +127,23 @@ defmodule Mix.Tasks.AwsLambda.Build do
     end
   end
 
+  # Without a daemon every docker command fails, and `docker pull` would be
+  # reported as a missing image.
+  defp ensure_docker_daemon! do
+    case System.cmd("docker", ["info", "--format", "{{.ServerVersion}}"], stderr_to_stdout: true) do
+      {_version, 0} ->
+        :ok
+
+      {output, _status} ->
+        Mix.raise(
+          "cannot reach the Docker daemon, is Docker running? " <>
+            "docker info said: #{String.trim(output)}"
+        )
+    end
+  end
+
+  # Docker's own error is printed above the raise, whatever the cause: a
+  # missing image, the network, the registry's authentication.
   defp pull_image!(image, platform) do
     case docker(["pull", "--platform", platform, image]) do
       :ok ->
@@ -132,8 +151,9 @@ defmodule Mix.Tasks.AwsLambda.Build do
 
       {:error, _status} ->
         Mix.raise(
-          "no builder image found for #{image}. Check that this Erlang/Elixir " <>
-            "version combination has been published to #{@image_prefix}."
+          "could not pull the builder image #{image} (see Docker's error above). " <>
+            "If the image isn't found, check that this Erlang/Elixir version " <>
+            "combination has been published to #{@image_prefix}."
         )
     end
   end

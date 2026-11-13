@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mix aws_lambda.build` checks that the Docker daemon is reachable before
+  pulling the builder image, and no longer reports every failed pull as a
+  missing image: Docker's own error is shown instead.
 - A handler that raises, throws or exits is logged once, by the runtime,
   instead of also producing the crash report of the task it runs in. A thrown
   value is reported as `Handler.Throw` rather than `Handler.Exit`.
