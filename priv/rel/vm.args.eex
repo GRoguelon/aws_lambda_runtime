@@ -7,10 +7,8 @@
 +sbwtdio none
 +swt very_low
 
-## The VM sees the host's core count, not the cgroup CPU share. Lambda gives
-## roughly one vCPU per 1769 MB of memory, so pin the schedulers rather than
-## oversubscribing. Raise these if you configure a lot of memory.
-+S 2:2
+## The scheduler count (+S) depends on the function's memory size, known only
+## at start: env.sh derives it from AWS_LAMBDA_FUNCTION_MEMORY_SIZE.
 +SDio 2
 
 ## Nothing to connect to, and no epmd running in the sandbox.

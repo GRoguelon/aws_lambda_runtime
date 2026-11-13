@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The scheduler count follows the function's memory size, one per vCPU
+  Lambda allocates (`ceil(AWS_LAMBDA_FUNCTION_MEMORY_SIZE / 1769)`), instead
+  of a fixed `+S 2:2`. It is set by `env.sh`; an `+S` in
+  `ELIXIR_ERL_OPTIONS` takes precedence.
+
 ## [0.2.0] - 2026-11-10
 
 ### Added
