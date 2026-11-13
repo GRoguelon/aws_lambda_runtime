@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AWS.Lambda.Runtime.Handler` gains `handle/3`, and the optional `init/1`
+  and `terminate/2`. `init/1` runs once per execution environment, once
+  every application has started, and its state is passed to every
+  `handle/3`; `terminate/2` runs on shutdown. `handle/3` receives an
+  `AWS.Lambda.Runtime.Request` for an HTTP request from a Function URL or
+  API Gateway (payload formats 2.0 and 1.0), with its query string, cookies
+  and body decoded, and the decoded payload for any other event. A body that
+  can't be decoded is answered with a `400`, a request no clause matches with
+  a `404`, and another event no clause matches with a `Runtime.UnhandledEvent`
+  error. `handler/2` is still supported.
+- `{:ok, body, opts}` sets the `:status`, `:headers` and `:cookies` of the
+  HTTP response to a request, encoded as the Function URL or API Gateway
+  expects it, and `:content_type` returns a binary body as is. Streams take
+  the same HTTP options, which `http:` still sets too.
 - Graceful shutdown: functions registered with
   `AWS.Lambda.Runtime.Shutdown.register/1` run when Lambda shuts the
   execution environment down, before the VM stops its applications. The

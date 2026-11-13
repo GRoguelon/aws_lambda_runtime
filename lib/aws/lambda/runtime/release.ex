@@ -34,9 +34,9 @@ defmodule AWS.Lambda.Runtime.Release do
       `handler/2`), a `{module, function}` pair or a handler string (see
       `AWS.Lambda.Runtime.Handler`). It takes precedence over
       `config :aws_lambda_runtime, :handler` and the function's *Handler*
-      setting. The module must be compiled and export the function with an
-      arity of 2, which is checked here, so a typo fails the build rather than
-      the cold start.
+      setting. The module must be compiled and define `handle/3`, or export
+      the function with an arity of 2 or 3, which is checked here, so a typo
+      fails the build rather than the cold start.
     * `:strip_iex` - when `true`, removes IEx from the release with
       `strip_iex/1`.
     * `:before_steps` - a list of steps to run before the other steps.
@@ -149,13 +149,16 @@ defmodule AWS.Lambda.Runtime.Release do
   defp handler_string!(handler) do
     {module, function} = Handler.parse!(handler)
 
-    unless Code.ensure_loaded?(module) and function_exported?(module, function, 2) do
-      raise ArgumentError,
-            "the handler #{inspect(module)}.#{function}/2 doesn't exist: " <>
-              "the module must be compiled and export the function with an arity of 2"
-    end
+    case Code.ensure_loaded?(module) && Handler.function(module, function) do
+      {function, _arity} ->
+        inspect(module) <> "." <> Atom.to_string(function)
 
-    inspect(module) <> "." <> Atom.to_string(function)
+      _missing ->
+        raise ArgumentError,
+              "the handler #{inspect(module)}.#{function}/2 doesn't exist: " <>
+                "the module must be compiled and define handle/3, or export the " <>
+                "function with an arity of 2 or 3"
+    end
   end
 
   defp maybe_strip_iex(release, opts) do

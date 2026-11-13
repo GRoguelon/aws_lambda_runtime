@@ -11,6 +11,11 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
     def process(event, _context), do: event
   end
 
+  defmodule NewHandler do
+    @moduledoc false
+    def handle(event, _context, _state), do: event
+  end
+
   describe "lambda/1" do
     test "returns the Lambda defaults" do
       release = Release.lambda()
@@ -80,6 +85,9 @@ defmodule AWS.Lambda.Runtime.ReleaseTest do
       assert Release.lambda(handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler")[
                :aws_lambda_runtime
              ] == [handler: "AWS.Lambda.Runtime.ReleaseTest.TestHandler.handler"]
+
+      assert Release.lambda(handler: NewHandler)[:aws_lambda_runtime] ==
+               [handler: "AWS.Lambda.Runtime.ReleaseTest.NewHandler.handle"]
 
       refute Keyword.has_key?(Release.lambda(), :aws_lambda_runtime)
       refute Keyword.has_key?(Release.lambda(handler: TestHandler), :handler)

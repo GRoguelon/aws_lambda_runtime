@@ -41,6 +41,73 @@ defmodule AWS.Lambda.RuntimeTest do
     end
   end
 
+  defmodule StatefulHandler do
+    @moduledoc false
+    @behaviour AWS.Lambda.Runtime.Handler
+
+    alias AWS.Lambda.Runtime.Request
+
+    @impl true
+    def init(info) do
+      send(test_pid(), {:init, info})
+      {:ok, %{greeting: "hello"}}
+    end
+
+    @impl true
+    def handle(%Request{method: "GET", path: "/hello", query: query}, _context, state) do
+      {:ok, %{greeting: state.greeting, name: query["name"]},
+       status: 201, headers: %{"X-Custom" => "1"}, cookies: ["a=b; Path=/"]}
+    end
+
+    def handle(%Request{method: "POST", path: "/echo", body: body}, _context, _state) do
+      send(test_pid(), {:handled, body})
+      {:ok, body}
+    end
+
+    def handle(%Request{path: "/text"}, _context, _state) do
+      {:ok, "plain", content_type: "text/plain"}
+    end
+
+    def handle(%Request{path: "/binary"}, _context, _state) do
+      {:ok, <<0, 255>>, content_type: "application/octet-stream"}
+    end
+
+    def handle(%Request{path: "/stream"}, _context, _state) do
+      {:stream, ["a", "b"], content_type: "text/plain", status: 202}
+    end
+
+    def handle(%Request{path: "/nested"}, _context, _state) do
+      nested(Process.get(:not_set))
+    end
+
+    def handle(%{"name" => name}, _context, state) do
+      {:ok, "#{state.greeting} #{name}"}
+    end
+
+    def handle(%{"raw" => text}, _context, _state) do
+      {:ok, text, content_type: "text/plain"}
+    end
+
+    def handle(%{"typo" => _}, _context, _state) do
+      {:ok, 1, content_typ: "text/plain"}
+    end
+
+    @impl true
+    def terminate(reason, state) do
+      send(test_pid(), {:terminated, reason, state})
+    end
+
+    defp nested(:set), do: :ok
+
+    defp test_pid, do: Application.fetch_env!(:aws_lambda_runtime, :test_pid)
+  end
+
+  defmodule FailingInitHandler do
+    @moduledoc false
+    def init(_info), do: {:error, :no_table}
+    def handle(event, _context, _state), do: {:ok, event}
+  end
+
   setup do
     Process.flag(:trap_exit, true)
     :persistent_term.erase({API, :endpoint})
@@ -286,6 +353,246 @@ defmodule AWS.Lambda.RuntimeTest do
         end)
 
       assert log =~ "could not register for SIGTERM"
+    end
+  end
+
+  describe "handle/3" do
+    setup do
+      Application.put_env(:aws_lambda_runtime, :handler, StatefulHandler)
+      Application.put_env(:aws_lambda_runtime, :test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:aws_lambda_runtime, :test_pid)
+        :persistent_term.erase({AWS.Lambda.Runtime.Shutdown, :hooks})
+      end)
+    end
+
+    @tag :capture_log
+    test "calls init/1 with the function's environment" do
+      System.put_env("AWS_LAMBDA_FUNCTION_NAME", "fn-name")
+      System.put_env("AWS_REGION", "eu-west-3")
+
+      on_exit(fn ->
+        System.delete_env("AWS_LAMBDA_FUNCTION_NAME")
+        System.delete_env("AWS_REGION")
+      end)
+
+      {_path, _headers, body} = invoke(%{"name" => "Ada"})
+
+      assert_received {:init, %{function_name: "fn-name", region: "eu-west-3"} = info}
+      assert Map.has_key?(info, :memory_limit_mb)
+      assert JSON.decode!(body) == "hello Ada"
+    end
+
+    @tag :capture_log
+    test "answers a payload format 2.0 request in its format" do
+      {path, _headers, body} =
+        invoke(%{
+          "version" => "2.0",
+          "rawPath" => "/hello",
+          "rawQueryString" => "name=Ada",
+          "requestContext" => %{"http" => %{"method" => "GET"}}
+        })
+
+      assert path == "/2018-06-01/runtime/invocation/req-h/response"
+
+      assert %{
+               "statusCode" => 201,
+               "headers" => %{"content-type" => "application/json", "x-custom" => "1"},
+               "cookies" => ["a=b; Path=/"],
+               "isBase64Encoded" => false,
+               "body" => json
+             } = JSON.decode!(body)
+
+      assert JSON.decode!(json) == %{"greeting" => "hello", "name" => "Ada"}
+    end
+
+    @tag :capture_log
+    test "answers a payload format 1.0 request in its format" do
+      {_path, _headers, body} =
+        invoke(%{
+          "httpMethod" => "GET",
+          "path" => "/hello",
+          "multiValueQueryStringParameters" => %{"name" => ["Ada"]},
+          "requestContext" => %{}
+        })
+
+      response = JSON.decode!(body)
+
+      assert response["statusCode"] == 201
+      assert response["multiValueHeaders"] == %{"set-cookie" => ["a=b; Path=/"]}
+      refute Map.has_key?(response, "cookies")
+    end
+
+    @tag :capture_log
+    test "returns a text body as is, and a binary one in base64" do
+      {_path, _headers, text} = invoke(http("GET", "/text"))
+      {_path, _headers, binary} = invoke(http("GET", "/binary"))
+
+      assert %{"body" => "plain", "isBase64Encoded" => false, "headers" => headers} =
+               JSON.decode!(text)
+
+      assert headers == %{"content-type" => "text/plain"}
+
+      assert %{"body" => encoded, "isBase64Encoded" => true} = JSON.decode!(binary)
+      assert Base.decode64!(encoded) == <<0, 255>>
+    end
+
+    @tag :capture_log
+    test "returns a body with a content type as is to a direct invocation" do
+      {_path, _headers, body} = invoke(%{"raw" => "not json"})
+
+      assert body == "not json"
+    end
+
+    @tag :capture_log
+    test "answers 400 without calling handle/3 when the body can't be decoded" do
+      event =
+        http("POST", "/echo")
+        |> Map.merge(%{"headers" => %{"content-type" => "application/json"}, "body" => "{nope"})
+
+      {_path, _headers, body} = invoke(event)
+
+      assert %{"statusCode" => 400, "body" => message} = JSON.decode!(body)
+      assert JSON.decode!(message) == %{"message" => "the request body is not valid JSON"}
+      refute_received {:handled, _body}
+    end
+
+    @tag :capture_log
+    test "streams a request's response with its HTTP options" do
+      {path, headers, body} = invoke(http("GET", "/stream"))
+
+      assert path == "/2018-06-01/runtime/invocation/req-h/response"
+      assert headers["content-type"] == "application/vnd.awslambda.http-integration-response"
+
+      [prelude, chunks] = String.split(body, <<0, 0, 0, 0, 0, 0, 0, 0>>, parts: 2)
+
+      assert %{"statusCode" => 202, "headers" => %{"content-type" => "text/plain"}} =
+               JSON.decode!(prelude)
+
+      assert chunks == "ab"
+    end
+
+    test "answers 404 when no clause matches a request" do
+      log =
+        capture_log(fn ->
+          {_path, _headers, body} = invoke(http("DELETE", "/nowhere"))
+
+          assert %{"statusCode" => 404, "body" => message} = JSON.decode!(body)
+          assert JSON.decode!(message) == %{"message" => "Not Found"}
+        end)
+
+      assert log =~ "matches DELETE /nowhere, answering 404"
+    end
+
+    test "reports an event no clause matches" do
+      log =
+        capture_log(fn ->
+          {path, headers, body} = invoke(%{"unknown" => 1})
+
+          assert path == "/2018-06-01/runtime/invocation/req-h/error"
+          assert headers["lambda-runtime-function-error-type"] == "Runtime.UnhandledEvent"
+
+          assert JSON.decode!(body)["errorMessage"] ==
+                   "no clause of AWS.Lambda.RuntimeTest.StatefulHandler.handle/3 matches the event"
+        end)
+
+      assert log =~ ~s(matches the event: %{"unknown" => 1})
+    end
+
+    @tag :capture_log
+    test "reports a function clause error raised further down as a failure" do
+      {_path, headers, body} = invoke(http("GET", "/nested"))
+
+      assert headers["lambda-runtime-function-error-type"] == "FunctionClauseError"
+      assert [_frame | _frames] = JSON.decode!(body)["stackTrace"]
+    end
+
+    @tag :capture_log
+    test "reports unknown response options" do
+      {_path, headers, body} = invoke(%{"typo" => true})
+
+      assert headers["lambda-runtime-function-error-type"] == "Runtime.InvalidResponse"
+      assert JSON.decode!(body)["errorMessage"] =~ "unknown response options: [:content_typ]"
+    end
+
+    @tag :capture_log
+    test "registers terminate/2 as a shutdown function, with the state" do
+      invoke(%{"name" => "Ada"})
+
+      AWS.Lambda.Runtime.Shutdown.run(fn -> :ok end)
+
+      assert_received {:terminated, :shutdown, %{greeting: "hello"}}
+    end
+
+    test "reports an init/1 error as an init error" do
+      Application.put_env(:aws_lambda_runtime, :handler, FailingInitHandler)
+      test_pid = self()
+
+      {_pid, endpoint} =
+        FakeRuntimeAPI.start([
+          fn {"POST", path, headers, body} ->
+            send(test_pid, {:init_error, path, headers, body})
+            {202, %{}, ""}
+          end
+        ])
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+      capture_log(fn ->
+        start_runtime!(halt: halt_fun())
+
+        assert_receive {:init_error, path, headers, body}, 1_000
+        assert_receive {:halted, 1}, 1_000
+
+        assert path == "/2018-06-01/runtime/init/error"
+        assert headers["lambda-runtime-function-error-type"] == "Runtime.InitError"
+        assert JSON.decode!(body)["errorMessage"] == "init/1 failed: :no_table"
+      end)
+    end
+
+    defp http(method, path) do
+      %{
+        "version" => "2.0",
+        "rawPath" => path,
+        "requestContext" => %{"http" => %{"method" => method}}
+      }
+    end
+
+    # Serves one invocation of `event`, answering the extension's requests,
+    # which arrive in any order, and returns what the runtime posted.
+    defp invoke(event) do
+      test_pid = self()
+
+      dispatch = fn
+        {"POST", "/2020-01-01/extension/register", _headers, _body} ->
+          {200, %{"lambda-extension-identifier" => "ext"}, "{}"}
+
+        {"GET", "/2020-01-01/extension/event/next", _headers, _body} ->
+          {500, %{}, "stop waiting"}
+
+        {"GET", _path, _headers, _body} ->
+          {200, %{"lambda-runtime-aws-request-id" => "req-h"}, JSON.encode!(event)}
+
+        {"POST", path, headers, body} ->
+          send(test_pid, {:posted, path, headers, body})
+          {202, %{}, ""}
+      end
+
+      {_pid, endpoint} = FakeRuntimeAPI.start(List.duplicate(dispatch, 4))
+
+      # A test may invoke more than once, each time with its own fake API.
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+      :persistent_term.erase({API, :endpoint})
+      :persistent_term.erase({AWS.Lambda.Runtime.Shutdown, :hooks})
+
+      runtime_pid = start_runtime!(halt: halt_fun())
+
+      assert_receive {:posted, path, headers, body}, 1_000
+
+      stop_runtime(runtime_pid)
+
+      {path, headers, body}
     end
   end
 

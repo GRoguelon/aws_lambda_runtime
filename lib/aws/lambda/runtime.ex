@@ -32,6 +32,7 @@ defmodule AWS.Lambda.Runtime do
   alias AWS.Lambda.Runtime.API
   alias AWS.Lambda.Runtime.Context
   alias AWS.Lambda.Runtime.Handler
+  alias AWS.Lambda.Runtime.Request
   alias AWS.Lambda.Runtime.Shutdown
 
   ## Module attributes
@@ -44,6 +45,9 @@ defmodule AWS.Lambda.Runtime do
   @stream_send_timeout 30_000
   @boot_poll_ms 1
   @extension_name "aws_lambda_runtime"
+  @init_info_keys [:function_name, :function_version, :memory_limit_mb, :log_group, :log_stream]
+  @response_options [:status, :headers, :cookies, :content_type]
+  @http_options [:status, :headers, :cookies]
 
   ## Public functions
 
@@ -70,22 +74,24 @@ defmodule AWS.Lambda.Runtime do
 
     wait_for_boot()
 
-    handler =
+    {handler, state} =
       try do
         :ok = API.setup()
-        Handler.resolve!()
+        {module, _function, _arity} = handler = Handler.resolve!()
+        {handler, init_handler(module)}
       catch
         kind, reason ->
-          fail_init(kind, reason, __STACKTRACE__)
+          fail_init(kind, reason, __STACKTRACE__, halt)
       end
 
-    {module, function} = handler
+    {module, function, arity} = handler
 
+    register_terminate(module, state)
     register_for_shutdown()
 
-    Logger.info("runtime ready, handler #{inspect(module)}.#{function}/2")
+    Logger.info("runtime ready, handler #{inspect(module)}.#{function}/#{arity}")
 
-    loop(handler, halt, 0)
+    loop(handler, state, halt, 0)
   end
 
   ## Private functions
@@ -109,6 +115,36 @@ defmodule AWS.Lambda.Runtime do
       {_internal, _provided} ->
         Process.sleep(@boot_poll_ms)
         wait_for_boot()
+    end
+  end
+
+  # Handler
+
+  # Called once wait_for_boot/0 has seen every application started, so init/1
+  # can use what the function's application started, such as an Ecto repo.
+  defp init_handler(module) do
+    if function_exported?(module, :init, 1) do
+      case module.init(init_info()) do
+        {:ok, state} -> state
+        {:error, reason} -> throw({:init_error, reason})
+        other -> throw({:init_error, {:bad_return, other}})
+      end
+    end
+  end
+
+  defp init_info do
+    %{}
+    |> Context.from_headers()
+    |> Map.from_struct()
+    |> Map.take(@init_info_keys)
+    |> Map.put(:region, System.get_env("AWS_REGION"))
+  end
+
+  # terminate/2 is a shutdown function like any other, so implementing it is
+  # enough for Lambda to send the SIGTERM.
+  defp register_terminate(module, state) do
+    if function_exported?(module, :terminate, 2) do
+      Shutdown.register(fn -> module.terminate(:shutdown, state) end)
     end
   end
 
@@ -150,7 +186,7 @@ defmodule AWS.Lambda.Runtime do
 
   # Loop
 
-  defp loop(handler, halt, failures) do
+  defp loop(handler, state, halt, failures) do
     case API.next_invocation() do
       {:ok, headers, raw_event} ->
         context = Context.from_headers(headers)
@@ -160,10 +196,10 @@ defmodule AWS.Lambda.Runtime do
         put_trace_id(context.trace_id)
 
         handler
-        |> process(context, raw_event)
+        |> process(context, raw_event, state)
         |> posted(halt)
 
-        loop(handler, halt, 0)
+        loop(handler, state, halt, 0)
 
       {:error, {:unexpected_status, status, body}} ->
         # The Runtime API answered: retrying won't change its mind.
@@ -175,7 +211,7 @@ defmodule AWS.Lambda.Runtime do
 
         Process.sleep(@backoff_ms)
 
-        loop(handler, halt, failures + 1)
+        loop(handler, state, halt, failures + 1)
 
       {:error, reason} ->
         fatal(halt, "could not fetch the next invocation: #{inspect(reason)}")
@@ -200,12 +236,21 @@ defmodule AWS.Lambda.Runtime do
     halt.(1)
   end
 
-  defp process({module, function}, context, raw_event) do
+  defp process({module, function, arity}, context, raw_event, state) do
     case decode_event(raw_event) do
       {:ok, event} ->
-        context
-        |> invoke(module, function, event)
-        |> reply(context)
+        case input(event, arity) do
+          {:ok, input} ->
+            args = if arity == 3, do: [input, context, state], else: [input, context]
+
+            context
+            |> invoke(module, function, args, input)
+            |> reply(context, input)
+
+          {:error, message, request} ->
+            Logger.info("bad request, not calling the handler: #{message}")
+            respond(context, request, %{"message" => message}, status: 400)
+        end
 
       {:error, reason} ->
         report(
@@ -219,7 +264,23 @@ defmodule AWS.Lambda.Runtime do
 
   # Dispatch
 
-  defp invoke(context, module, function, event) do
+  # handle/3 gets an HTTP request decoded, handler/2 the event as it is.
+  defp input(event, 3) do
+    case Request.from_event(event) do
+      {:ok, request} -> {:ok, request}
+      :error -> {:ok, event}
+      {:error, message} -> {:error, message, %Request{event: event, format: format(event)}}
+    end
+  end
+
+  defp input(event, 2) do
+    {:ok, event}
+  end
+
+  defp format(%{"version" => "2.0"}), do: :v2
+  defp format(_event), do: :v1
+
+  defp invoke(context, module, function, args, input) do
     timeout = invocation_timeout(context)
 
     task =
@@ -230,13 +291,25 @@ defmodule AWS.Lambda.Runtime do
         # the handler's enumerable. Failures are returned rather than let
         # crash the task, which would log a crash report on top of ours.
         try do
-          case apply(module, function, [event, context]) do
-            {:stream, chunks} -> {:streamed, stream(context, chunks, [])}
-            {:stream, chunks, opts} -> {:streamed, stream(context, chunks, opts)}
-            result -> {:returned, result}
+          case apply(module, function, args) do
+            {:stream, chunks} ->
+              {:streamed, stream(context, chunks, stream_opts([], input))}
+
+            {:stream, chunks, opts} ->
+              {:streamed, stream(context, chunks, stream_opts(opts, input))}
+
+            result ->
+              {:returned, result}
           end
         catch
-          kind, reason -> {:failed, kind, reason, __STACKTRACE__}
+          kind, reason ->
+            # No clause of the handler itself matches: not a bug in its code.
+            if kind == :error and reason == :function_clause and
+                 unmatched?(__STACKTRACE__, module, function, args) do
+              {:unmatched, {module, function, length(args)}}
+            else
+              {:failed, kind, reason, __STACKTRACE__}
+            end
         end
       end)
 
@@ -287,6 +360,17 @@ defmodule AWS.Lambda.Runtime do
      )}
   end
 
+  # For a request, the HTTP options make the prelude; :http, which
+  # handler/2 sets them with, still wins.
+  defp stream_opts(opts, %Request{}) do
+    {http, opts} = Keyword.split(opts, @http_options)
+    Keyword.put_new(opts, :http, http)
+  end
+
+  defp stream_opts(opts, _event) do
+    Keyword.drop(opts, @http_options)
+  end
+
   defp prelude(http, content_type) do
     http = Keyword.validate!(http, status: 200, headers: %{}, cookies: [])
 
@@ -323,31 +407,56 @@ defmodule AWS.Lambda.Runtime do
 
   # Replying
 
-  defp reply({:streamed, posted}, _context) do
+  defp reply({:streamed, posted}, _context, _input) do
     posted
   end
 
-  defp reply({:returned, {:ok, payload}}, context) do
-    respond(context, payload)
+  defp reply({:returned, {:ok, body}}, context, input) do
+    respond(context, input, body, [])
   end
 
-  defp reply({:returned, {:error, reason}}, context) do
+  defp reply({:returned, {:ok, body, opts}}, context, input) when is_list(opts) do
+    respond(context, input, body, opts)
+  end
+
+  defp reply({:returned, {:error, reason}}, context, _input) do
     Logger.error("handler returned an error: #{inspect(reason)}")
     report(context, "Handler.Error", describe(reason), [])
   end
 
-  defp reply({:returned, payload}, context) do
-    respond(context, payload)
+  defp reply({:returned, body}, context, input) do
+    respond(context, input, body, [])
   end
 
-  defp reply({:failed, kind, reason, stacktrace}, context) do
+  # A route nobody handles, as a router would answer it.
+  defp reply({:unmatched, {module, function, arity}}, context, %Request{} = request) do
+    Logger.warning(
+      "no clause of #{Exception.format_mfa(module, function, arity)} matches " <>
+        "#{request.method} #{request.path}, answering 404"
+    )
+
+    respond(context, request, %{"message" => "Not Found"}, status: 404)
+  end
+
+  defp reply({:unmatched, {module, function, arity}}, context, event) do
+    mfa = Exception.format_mfa(module, function, arity)
+
+    Logger.error(
+      "no clause of #{mfa} matches the event: " <>
+        inspect(event, limit: 10, printable_limit: 200)
+    )
+
+    report(context, "Runtime.UnhandledEvent", "no clause of #{mfa} matches the event", [])
+  end
+
+  defp reply({:failed, kind, reason, stacktrace}, context, _input) do
     Logger.error(Exception.format(kind, reason, stacktrace))
 
     {type, message} = failure(kind, reason, stacktrace)
     report(context, type, message, stacktrace)
   end
 
-  defp reply({:timed_out, timeout}, context) do
+  defp reply({:timed_out, timeout}, context, _input) do
     Logger.error("handler did not return within #{timeout}ms")
 
     report(
@@ -358,14 +467,76 @@ defmodule AWS.Lambda.Runtime do
     )
   end
 
-  defp respond(context, payload) do
-    case encode(payload) do
-      {:ok, body} ->
-        {"response", API.invocation_response(context.request_id, body)}
+  defp respond(context, input, body, opts) do
+    with {:ok, opts} <- validate_response_options(opts),
+         {:ok, payload} <- encode_response(input, body, opts) do
+      {"response", API.invocation_response(context.request_id, payload)}
+    else
+      {:error, :options, message} ->
+        report(context, "Runtime.InvalidResponse", message, [])
 
       {:error, message} ->
         report(context, "Runtime.UnserializableResult", message, [])
     end
+  end
+
+  defp validate_response_options(opts) do
+    if Keyword.keyword?(opts) do
+      case Keyword.validate(opts, @response_options) do
+        {:ok, opts} -> {:ok, opts}
+        {:error, unknown} -> {:error, :options, "unknown response options: #{inspect(unknown)}"}
+      end
+    else
+      {:error, :options, "the response options must be a keyword list, got: #{inspect(opts)}"}
+    end
+  end
+
+  # As a Function URL or API Gateway expects it, in the request's format.
+  defp encode_response(%Request{format: format}, body, opts) do
+    with {:ok, content, content_type} <- http_body(body, opts[:content_type]) do
+      {encoded?, content} =
+        if String.valid?(content), do: {false, content}, else: {true, Base.encode64(content)}
+
+      headers =
+        opts
+        |> Keyword.get(:headers, %{})
+        |> Map.new(fn {name, value} -> {name |> to_string() |> String.downcase(), value} end)
+        |> Map.put_new("content-type", content_type)
+
+      %{
+        "statusCode" => Keyword.get(opts, :status, 200),
+        "headers" => headers,
+        "body" => content,
+        "isBase64Encoded" => encoded?
+      }
+      |> put_cookies(format, Keyword.get(opts, :cookies, []))
+      |> encode()
+    end
+  end
+
+  defp encode_response(_event, body, opts) do
+    if is_binary(body) and is_binary(opts[:content_type]) do
+      {:ok, body}
+    else
+      encode(body)
+    end
+  end
+
+  defp http_body(body, content_type) when is_binary(body) and is_binary(content_type) do
+    {:ok, body, content_type}
+  end
+
+  defp http_body(body, content_type) do
+    with {:ok, json} <- encode(body) do
+      {:ok, IO.iodata_to_binary(json), content_type || "application/json"}
+    end
+  end
+
+  defp put_cookies(response, _format, []), do: response
+  defp put_cookies(response, :v2, cookies), do: Map.put(response, "cookies", cookies)
+
+  defp put_cookies(response, :v1, cookies) do
+    Map.put(response, "multiValueHeaders", %{"set-cookie" => cookies})
   end
 
   defp report(context, type, message, stacktrace) do
@@ -384,14 +555,20 @@ defmodule AWS.Lambda.Runtime do
 
   # Initialisation failure
 
-  defp fail_init(kind, reason, stacktrace) do
+  defp fail_init(kind, reason, stacktrace, halt) do
     exception = Exception.normalize(kind, reason, stacktrace)
 
     {type, message} =
-      if is_exception(exception) do
-        {inspect(exception.__struct__), Exception.message(exception)}
-      else
-        {"Runtime.InitError", describe(reason)}
+      cond do
+        match?({:throw, {:init_error, _reason}}, {kind, reason}) ->
+          {:init_error, reason} = reason
+          {"Runtime.InitError", "init/1 failed: #{describe(reason)}"}
+
+        is_exception(exception) ->
+          {inspect(exception.__struct__), Exception.message(exception)}
+
+        true ->
+          {"Runtime.InitError", describe(reason)}
       end
 
     Logger.error("initialisation failed: #{message}")
@@ -399,10 +576,23 @@ defmodule AWS.Lambda.Runtime do
     API.init_error(error_payload(type, message, stacktrace), type)
 
     Logger.flush()
-    System.halt(1)
+    halt.(1)
+
+    # Only reached when halt/1 is stubbed, in tests.
+    exit(:normal)
   end
 
   # Helpers
+
+  # The function clause error comes from the call to the handler itself, the
+  # top of the stack, rather than from a call made from it.
+  defp unmatched?([{module, function, args_or_arity, _location} | _rest], module, function, args) do
+    args_or_arity == args or args_or_arity == length(args)
+  end
+
+  defp unmatched?(_stacktrace, _module, _function, _args) do
+    false
+  end
 
   defp decode_event("") do
     {:ok, nil}

@@ -13,6 +13,19 @@ defmodule AWS.Lambda.Runtime.HandlerTest do
     def not_a_handler(_event, _context), do: :nope
   end
 
+  defmodule NewHandler do
+    @moduledoc false
+    @behaviour Handler
+
+    @impl Handler
+    def handle(event, _context, _state), do: {:ok, event}
+
+    @impl Handler
+    def handler(event, _context), do: {:ok, event}
+
+    def process(event, _context, _state), do: {:ok, event}
+  end
+
   describe "parse!/1" do
     test "a bare module defaults to handler/2" do
       assert Handler.parse!(TestHandler) == {TestHandler, :handler}
@@ -66,20 +79,32 @@ defmodule AWS.Lambda.Runtime.HandlerTest do
       Application.put_env(:aws_lambda_runtime, :handler, {TestHandler, :handler})
       System.put_env("_HANDLER", "SomeOther.Module")
 
-      assert Handler.resolve!() == {TestHandler, :not_a_handler}
+      assert Handler.resolve!() == {TestHandler, :not_a_handler, 2}
     end
 
     test "prefers the compile-time config over _HANDLER" do
       Application.put_env(:aws_lambda_runtime, :handler, {TestHandler, :handler})
       System.put_env("_HANDLER", "SomeOther.Module")
 
-      assert Handler.resolve!() == {TestHandler, :handler}
+      assert Handler.resolve!() == {TestHandler, :handler, 2}
     end
 
     test "falls back to the _HANDLER environment variable" do
       System.put_env("_HANDLER", "AWS.Lambda.Runtime.HandlerTest.TestHandler")
 
-      assert Handler.resolve!() == {TestHandler, :handler}
+      assert Handler.resolve!() == {TestHandler, :handler, 2}
+    end
+
+    test "prefers handle/3 for a module given alone" do
+      Application.put_env(:aws_lambda_runtime, :handler, NewHandler)
+
+      assert Handler.resolve!() == {NewHandler, :handle, 3}
+    end
+
+    test "calls a named function with an arity of 3" do
+      Application.put_env(:aws_lambda_runtime, :handler, {NewHandler, :process})
+
+      assert Handler.resolve!() == {NewHandler, :process, 3}
     end
 
     test "raises when nothing is configured" do

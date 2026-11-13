@@ -97,22 +97,31 @@ releases: [
 
 ### 3. Write a handler
 
-A handler is any module that implements the `AWS.Lambda.Runtime.Handler`
-behaviour — a `handler/2` function receiving the decoded event and an
-`AWS.Lambda.Runtime.Context` struct:
+A handler is a module implementing the `AWS.Lambda.Runtime.Handler`
+behaviour. `handle/3` receives each invocation's event, an
+`AWS.Lambda.Runtime.Context` struct, and the state `init/1` built:
 
 ```elixir
 defmodule HelloFunction do
+  @behaviour AWS.Lambda.Runtime.Handler
+
   alias AWS.Lambda.Runtime.Context
-  alias AWS.Lambda.Runtime.Handler
+  alias AWS.Lambda.Runtime.Request
 
-  @behaviour Handler
+  @impl true
+  def init(_info) do
+    {:ok, %{otp_release: :erlang.system_info(:otp_release)}}
+  end
 
-  @impl Handler
-  def handler(event, context) do
+  @impl true
+  def handle(%Request{method: "GET", path: "/hello", query: query}, _context, state) do
+    {:ok, %{message: "hello #{query["name"]} from Elixir on #{state.otp_release}"}}
+  end
+
+  def handle(event, context, state) do
     {:ok,
      %{
-       message: "hello from Elixir on #{:erlang.system_info(:otp_release)}",
+       message: "hello from Elixir on #{state.otp_release}",
        received: event,
        request_id: context.request_id,
        remaining_ms: Context.remaining_time_ms(context)
@@ -120,6 +129,32 @@ defmodule HelloFunction do
   end
 end
 ```
+
+- **`init/1`**, optional, runs once per execution environment during Lambda's
+  init phase, once every application has started, the function's own
+  included: it can query an `Ecto.Repo` the application started. The state
+  it returns is passed to every `handle/3`, which can't change it.
+- **`handle/3`** gets an `AWS.Lambda.Runtime.Request` for an HTTP request
+  from a Function URL or API Gateway, with its query string, cookies and body
+  already decoded (JSON and forms into maps), and the payload decoded from
+  JSON for anything else: a direct invocation, or an event from SQS, S3,
+  EventBridge…
+- **`terminate/2`**, optional, runs when Lambda shuts the execution
+  environment down (see [Graceful shutdown](#graceful-shutdown)).
+
+It returns `{:ok, body}`, `{:ok, body, opts}`, `{:stream, chunks}` or
+`{:stream, chunks, opts}`, or `{:error, reason}` for a function error. For an
+HTTP request, `opts` can set the response's `:status`, `:headers` and
+`:cookies`, and the runtime encodes it as the Function URL or API Gateway
+expects it. `:content_type` returns a binary body as is rather than in JSON.
+
+When no `handle/3` clause matches, the runtime answers an HTTP request with a
+`404`, and reports any other event as a `Runtime.UnhandledEvent` function
+error, with the event in the logs.
+
+A module defining `handler/2` instead, which receives the event decoded from
+JSON as is and no state, still works: see the `AWS.Lambda.Runtime.Handler`
+moduledoc.
 
 The runtime calls the first handler set of:
 
@@ -142,7 +177,7 @@ The runtime calls the first handler set of:
    step 5. As it is read at each cold start, one package can serve several
    functions, each with its own handler.
 
-Each takes a module, `HelloFunction` (calls `handler/2`), or a function,
+Each takes a module, `HelloFunction` (calls `handle/3`), or a function,
 `{HelloFunction, :some_function}` or `HelloFunction.some_function` as a
 string: see the `AWS.Lambda.Runtime.Handler` moduledoc for every accepted
 format. Lambda requires a *Handler* setting even when the handler comes from
@@ -206,9 +241,9 @@ See the `AWS.Lambda.Runtime.Handler` moduledoc for every option, and for how
 an error is reported once streaming has started.
 
 The two examples below extend the `HelloFunction` handler of step 3. Add
-their `handler/2` clauses above the one of step 3, which matches any event
-and so must come last, with `@impl Handler` above the first clause. Both
-stream a line every half second, from this helper:
+their `handle/3` clauses above the last one of step 3, which matches any
+event and so must come last. Both stream a line every half second, from this
+helper:
 
 ```elixir
 defp chunks(count) do
@@ -233,7 +268,7 @@ payload as its event, like any invocation, and its chunks are sent as they
 are:
 
 ```elixir
-def handler(%{"stream" => count}, _context) when is_integer(count) do
+def handle(%{"stream" => count}, _context, _state) when is_integer(count) do
   {:stream, chunks(count), content_type: "text/plain"}
 end
 ```
@@ -262,15 +297,14 @@ An error raised once streaming has started arrives in the final
 
 ### Example: streaming through a Function URL
 
-A Function URL hands the handler an HTTP request event, with the query
-string in `"queryStringParameters"`, and expects the status, headers and
-cookies of the HTTP response before its body: that's what `http:` adds
-(status `200` unless given):
+A Function URL hands the handler an `AWS.Lambda.Runtime.Request`, and the
+runtime sends the status, headers and cookies of the HTTP response before its
+body (status `200` unless given):
 
 ```elixir
-def handler(%{"queryStringParameters" => %{"stream" => count}}, _context) do
+def handle(%Request{query: %{"stream" => count}}, _context, _state) do
   {:stream, chunks(String.to_integer(count)),
-   content_type: "text/plain", http: [headers: %{"cache-control" => "no-cache"}]}
+   content_type: "text/plain", headers: %{"cache-control" => "no-cache"}}
 end
 ```
 
@@ -379,7 +413,7 @@ aws lambda update-function-configuration --function-name elixir-hello \
   stays a single CloudWatch Logs event.
 
 ```json
-{"level":"INFO","message":"two\nlines","mfa":"MyApp.Handler.handler/2","requestId":"8f5…","timestamp":"2026-11-13T15:49:52.683Z","user_id":42}
+{"level":"INFO","message":"two\nlines","mfa":"MyApp.Handler.handle/3","requestId":"8f5…","timestamp":"2026-11-13T15:49:52.683Z","user_id":42}
 ```
 
 In the `Text` format, entries are written by `Logger`'s default formatter.
@@ -404,7 +438,7 @@ subsegments of the invocation's segment:
 ```elixir
 alias AWS.Lambda.Runtime.XRay
 
-def handler(%{"user_id" => id}, _context) do
+def handle(%{"user_id" => id}, _context, _state) do
   user =
     XRay.subsegment("load_user", fn -> Repo.get(User, id) end,
       annotations: %{user_id: id}
@@ -482,28 +516,30 @@ depends on it.
 
 Lambda shuts an execution environment down after it has been idle for a
 while, or when the function is updated. To flush a buffer or close a
-connection then, register a function from the function's application:
+connection then, implement the handler's `terminate/2`, called with
+`:shutdown` and `init/1`'s state:
 
 ```elixir
-def start(_type, _args) do
-  AWS.Lambda.Runtime.Shutdown.register(fn -> HelloFunction.Metrics.flush() end)
-
-  Supervisor.start_link(children, strategy: :one_for_one)
+@impl true
+def terminate(_reason, _state) do
+  HelloFunction.Metrics.flush()
 end
 ```
 
-Lambda only sends a SIGTERM before shutting an environment down when an
-extension is registered in it: with a function registered, the runtime
-registers itself as an internal extension during the init phase, so no
-extension layer is needed.
+Code outside the handler, a library for instance, can register a function
+of its own with `AWS.Lambda.Runtime.Shutdown.register/1`, before the first
+invocation.
 
-On SIGTERM, the registered functions run in order while every application
-is still running, `Logger` is flushed, then the VM stops its applications,
+Lambda only sends a SIGTERM before shutting an environment down when an
+extension is registered in it: with `terminate/2` or a function registered,
+the runtime registers itself as an internal extension during the init phase,
+so no extension layer is needed.
+
+On SIGTERM, `terminate/2` and the registered functions run in order while
+every application is still running, `Logger` is flushed, then the VM stops its applications,
 which also runs their `stop/1` callbacks and the `terminate/2` of the
 processes trapping exits. Lambda allows about 500 milliseconds for all of
-it before killing the environment, so keep these functions short. A function
-must be registered before the first invocation for Lambda to send the
-SIGTERM.
+it before killing the environment, so keep these functions short.
 
 ## Embedding ERTS instead of the OTP layer
 

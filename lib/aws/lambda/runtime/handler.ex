@@ -1,17 +1,119 @@
 defmodule AWS.Lambda.Runtime.Handler do
   @moduledoc """
-  Behaviour implemented by your function, plus resolution of the `_HANDLER`
-  environment variable that Lambda sets from the function's *Handler* setting.
+  Behaviour implemented by your function, plus resolution of the handler to
+  call.
+
+      defmodule MyLambda.Handler do
+        @behaviour AWS.Lambda.Runtime.Handler
+
+        alias AWS.Lambda.Runtime.Request
+
+        @impl true
+        def init(_info) do
+          {:ok, %{table: System.fetch_env!("TABLE")}}
+        end
+
+        @impl true
+        def handle(%Request{method: "GET", path: "/users/" <> id}, _context, state) do
+          {:ok, MyLambda.Users.get(state.table, id)}
+        end
+
+        def handle(%Request{method: "POST", path: "/users", body: %{"name" => name}}, _context, state) do
+          {:ok, MyLambda.Users.create(state.table, name), status: 201}
+        end
+
+        def handle(%{"name" => name}, _context, _state) do
+          {:ok, %{greeting: "hello \#{name}"}}
+        end
+
+        @impl true
+        def terminate(_reason, _state) do
+          MyLambda.Metrics.flush()
+        end
+      end
+
+  ## Callbacks
+
+    * `c:init/1`, optional, runs once per execution environment, during
+      Lambda's init phase, before the first invocation. Its state is passed
+      to every `c:handle/3`, which can't change it. It runs in the runtime's
+      process: start long-lived processes from the function's application
+      instead, so they aren't linked to it.
+    * `c:handle/3` handles each invocation. The event is:
+        * an `AWS.Lambda.Runtime.Request` for an HTTP request from a
+          Function URL or API Gateway, with its body already decoded;
+        * the payload, decoded from JSON, for anything else: a direct
+          invocation, or an event from SQS, S3, EventBridge…
+    * `c:terminate/2`, optional, is called with `:shutdown` when Lambda shuts
+      the execution environment down. Implementing it is enough for Lambda
+      to warn the runtime: see `AWS.Lambda.Runtime.Shutdown`.
+
+  `c:handler/2`, which receives the event decoded from JSON as is, without
+  state, is still called when the module doesn't define `c:handle/3`.
+
+  ## Return values
+
+    * `{:ok, body}` - `body` is JSON encoded and returned to the caller.
+    * `{:ok, body, opts}` - the same, with these options:
+        * `:status`, `:headers` (a map), `:cookies` (a list of `Set-Cookie`
+          values) - of the HTTP response, for an `AWS.Lambda.Runtime.Request`.
+          Ignored otherwise.
+        * `:content_type` - a binary `body` is then returned as is rather than
+          JSON encoded.
+    * `{:stream, chunks}` or `{:stream, chunks, opts}` - streams the response,
+      see below.
+    * `{:error, reason}` - reported to Lambda as a function error.
+    * anything else - JSON encoded and returned to the caller.
+
+  For an `AWS.Lambda.Runtime.Request`, the response is encoded as the
+  Function URL or API Gateway expects it: status `200`, a `content-type`
+  of `application/json` unless given, and a body that isn't UTF-8 encoded in
+  base64.
+
+  Raising, exiting or throwing is caught by the runtime and reported as a
+  function error without taking down the VM, so the sandbox stays warm.
+
+  ## Streaming
+
+  `chunks` is any enumerable of iodata, such as a `Stream`. It is consumed
+  lazily and each element is sent to the caller as soon as it is produced;
+  empty elements are skipped. The whole stream must be sent before the
+  invocation deadline.
+
+      def handle(%Request{path: "/events"}, _context, _state) do
+        {:stream, Stream.map(1..5, &"data: \#{&1}\\n\\n"),
+         content_type: "text/event-stream", headers: %{"cache-control" => "no-cache"}}
+      end
+
+  Options:
+
+    * `:content_type` - of the stream. Defaults to `"application/octet-stream"`.
+    * `:status`, `:headers`, `:cookies` - of the HTTP response, for an
+      `AWS.Lambda.Runtime.Request` from a Function URL in `RESPONSE_STREAM`
+      mode. Ignored otherwise.
+    * `:http` - the same three as a keyword list, the only way to set them
+      from `c:handler/2`. Without it, `c:handler/2`'s chunks are sent as they
+      are, as `InvokeWithResponseStream` callers expect.
+    * `:send_timeout` - in milliseconds, how long writing one chunk may stall
+      before the stream is abandoned. Defaults to `30_000`.
+
+  Once the first chunk is sent the response is committed: an exception raised
+  while producing the rest is sent in the stream's error trailers, which
+  Lambda passes on to the caller.
+
+  Lambda only streams to callers that ask for it - a Function URL configured
+  with `RESPONSE_STREAM` or the `InvokeWithResponseStream` API; others get the
+  whole response once it is complete.
 
   ## Accepted handler strings
 
-      MyLambda.Handler                  # calls MyLambda.Handler.handler/2
-      MyLambda.Handler.process          # calls MyLambda.Handler.process/2
+      MyLambda.Handler                  # calls handle/3, or handler/2
+      MyLambda.Handler.process          # calls process/3, or process/2
       Elixir.MyLambda.Handler.process   # the Elixir. prefix is optional
 
   The rule is simple: if the last dot-separated segment starts with a lowercase
   letter or underscore it is taken as the function name, otherwise the whole
-  string is the module and `handler/2` is assumed.
+  string is the module.
 
   ## Where the handler comes from
 
@@ -33,58 +135,46 @@ defmodule AWS.Lambda.Runtime.Handler do
 
   Lambda requires a *Handler* setting even when the handler comes from the
   release or the config: any value then does.
-
-  ## Return values
-
-    * `{:ok, payload}` — `payload` is JSON encoded and returned to the caller
-    * `{:error, reason}` — reported to Lambda as a function error
-    * `{:stream, chunks}` or `{:stream, chunks, opts}` — streams the response,
-      see below
-    * anything else — encoded and returned as the payload
-
-  Raising, exiting or throwing is caught by the runtime and reported as a
-  function error without taking down the VM, so the sandbox stays warm.
-
-  ## Streaming
-
-  `chunks` is any enumerable of iodata, such as a `Stream`. It is consumed
-  lazily and each element is sent to the caller as soon as it is produced;
-  empty elements are skipped. The whole stream must be sent before the
-  invocation deadline.
-
-      def handler(%{"count" => count}, _context) do
-        {:stream, Stream.map(1..count, &"data: \#{&1}\\n\\n"),
-         content_type: "text/event-stream",
-         http: [headers: %{"cache-control" => "no-cache"}]}
-      end
-
-  Options:
-
-    * `:content_type` — of the stream. Defaults to `"application/octet-stream"`.
-    * `:http` — for a Function URL in `RESPONSE_STREAM` mode, the status
-      (`:status`, default `200`), `:headers` (a map) and `:cookies` (a list)
-      of its HTTP response. Without it, the chunks are sent as they are, as
-      `InvokeWithResponseStream` callers expect.
-    * `:send_timeout` — in milliseconds, how long writing one chunk may stall
-      before the stream is abandoned. Defaults to `30_000`.
-
-  Once the first chunk is sent the response is committed: an exception raised
-  while producing the rest is sent in the stream's error trailers, which
-  Lambda passes on to the caller.
-
-  Lambda only streams to callers that ask for it — a Function URL configured
-  with `RESPONSE_STREAM` or the `InvokeWithResponseStream` API; others get the
-  whole response once it is complete.
   """
+
+  alias AWS.Lambda.Runtime.Context
+  alias AWS.Lambda.Runtime.Request
+
+  ## Types
+
+  @typedoc "What the function's environment is, given to `c:init/1`."
+  @type info :: %{
+          function_name: String.t() | nil,
+          function_version: String.t() | nil,
+          memory_limit_mb: pos_integer() | nil,
+          region: String.t() | nil,
+          log_group: String.t() | nil,
+          log_stream: String.t() | nil
+        }
+
+  @type result ::
+          {:ok, term()}
+          | {:ok, term(), keyword()}
+          | {:error, term()}
+          | {:stream, Enumerable.t()}
+          | {:stream, Enumerable.t(), keyword()}
+          | term()
 
   ## Behaviours
 
-  @callback handler(event :: term(), context :: term()) ::
-              {:ok, term()}
-              | {:error, term()}
-              | {:stream, Enumerable.t()}
-              | {:stream, Enumerable.t(), keyword()}
-              | term()
+  @doc "Builds the state given to every `c:handle/3`. See the moduledoc."
+  @callback init(info()) :: {:ok, state :: term()} | {:error, reason :: term()}
+
+  @doc "Handles an invocation. See the moduledoc."
+  @callback handle(event :: Request.t() | term(), Context.t(), state :: term()) :: result()
+
+  @doc "Called when Lambda shuts the execution environment down. See the moduledoc."
+  @callback terminate(reason :: :shutdown, state :: term()) :: term()
+
+  @doc "Handles an invocation, without `c:init/1`'s state or `AWS.Lambda.Runtime.Request`."
+  @callback handler(event :: term(), Context.t()) :: result()
+
+  @optional_callbacks init: 1, handle: 3, terminate: 2, handler: 2
 
   ## Module attributes
 
@@ -93,9 +183,9 @@ defmodule AWS.Lambda.Runtime.Handler do
   ## Public functions
 
   @doc """
-  Resolves the configured handler into a `{module, function}` pair, raising if
-  it cannot be loaded. Called once during initialisation so that a bad handler
-  surfaces as an init error rather than failing every invocation.
+  Resolves the configured handler into a `{module, function, arity}` tuple,
+  raising if it cannot be loaded. Called once during initialisation so that a
+  bad handler surfaces as an init error rather than failing every invocation.
   """
   def resolve!() do
     spec =
@@ -110,13 +200,30 @@ defmodule AWS.Lambda.Runtime.Handler do
 
     Code.ensure_loaded!(module)
 
-    unless function_exported?(module, function, 2) do
-      raise ArgumentError,
-            "#{inspect(module)}.#{function}/2 is not exported — the handler must " <>
-              "accept the event and the invocation context"
-    end
+    case function(module, function) do
+      {function, arity} ->
+        {module, function, arity}
 
-    {module, function}
+      nil ->
+        raise ArgumentError,
+              "#{inspect(module)}.#{function}/2 is not exported — the handler must " <>
+                "define handle/3, or accept the event and the invocation context"
+    end
+  end
+
+  @doc """
+  The function of a loaded `module` to call for `function`, as given by
+  `parse!/1`, with its arity: `handle/3` for a module given alone that
+  defines it, else `function/3`, else `function/2`. `nil` when it has none.
+  """
+  @spec function(module(), atom()) :: {atom(), 2 | 3} | nil
+  def function(module, function) do
+    cond do
+      function == @default_function and function_exported?(module, :handle, 3) -> {:handle, 3}
+      function_exported?(module, function, 3) -> {function, 3}
+      function_exported?(module, function, 2) -> {function, 2}
+      true -> nil
+    end
   end
 
   @doc """
