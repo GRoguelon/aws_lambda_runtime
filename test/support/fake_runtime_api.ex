@@ -3,7 +3,7 @@ defmodule Support.FakeRuntimeAPI do
   A minimal `:gen_tcp`-based stand-in for the AWS Lambda Runtime API.
 
   Kept dependency free, like the library itself: no HTTP server library is
-  pulled in just to test the `:httpc` client. Each element of `steps` handles
+  pulled in just to test the HTTP client. Each element of `steps` handles
   exactly one HTTP request/response exchange, in order; once the list is
   exhausted the listening socket is closed and further connections fail.
   """
@@ -81,8 +81,8 @@ defmodule Support.FakeRuntimeAPI do
       "0" ->
         # `:gen_tcp.recv(socket, 0)` doesn't mean "read zero bytes": it means
         # "read whatever is available, blocking until something arrives" -
-        # which never happens for a bodyless request. OTP 27's httpc sends
-        # this header on GETs (OTP 28+ doesn't), so this case is reachable.
+        # which never happens for a bodyless request, e.g. a POST of an empty
+        # body.
         ""
 
       length ->

@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Handlers calling `:httpc` over HTTPS must add `:ssl` to their own
   `extra_applications`; HTTP clients such as Req, Finch or Hackney already
   depend on it.
+- The Runtime API client is built on `:gen_tcp` (`AWS.Lambda.Runtime.HTTP`)
+  instead of `:httpc`, so `:inets` is no longer started either. Handlers
+  using `:httpc` must add `:inets` to their own `extra_applications`.
 
 ## [0.2.0] - 2026-11-10
 

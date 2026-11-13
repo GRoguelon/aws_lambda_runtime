@@ -4,8 +4,8 @@ A dependency-free [AWS Lambda custom runtime](https://docs.aws.amazon.com/lambda
 for Elixir.
 
 `AWS.Lambda.Runtime` implements the [Lambda Runtime API](https://docs.aws.amazon.com/lambda/latest/dg/runtimes-api.html)
-directly on top of `:inets`/`:httpc` and the OTP-bundled `JSON` module — no
-HTTP client, no JSON library, and no other dependency beyond what ships with
+directly on top of `:gen_tcp` and the OTP-bundled `JSON` module — no HTTP
+client, no JSON library, and no other dependency beyond what ships with
 Erlang/OTP itself. It also wires up the `mix release` steps needed to package
 a function for the `provided.al2023` runtime.
 

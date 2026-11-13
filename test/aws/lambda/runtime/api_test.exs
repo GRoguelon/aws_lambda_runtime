@@ -16,11 +16,19 @@ defmodule AWS.Lambda.Runtime.APITest do
   end
 
   describe "setup/0" do
-    test "starts the httpc profile and caches the endpoint" do
-      {_pid, endpoint} = FakeRuntimeAPI.start([])
-      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+    test "caches the endpoint" do
+      System.put_env("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
 
       assert :ok = API.setup()
+      assert :persistent_term.get({API, :endpoint}) == {~c"127.0.0.1", 9001}
+    end
+
+    test "raises when AWS_LAMBDA_RUNTIME_API is not HOST:PORT" do
+      System.put_env("AWS_LAMBDA_RUNTIME_API", "127.0.0.1")
+
+      assert_raise RuntimeError, ~r/must be HOST:PORT/, fn ->
+        API.setup()
+      end
     end
 
     test "raises when AWS_LAMBDA_RUNTIME_API is not set" do

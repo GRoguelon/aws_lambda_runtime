@@ -16,7 +16,7 @@ defmodule AWS.Lambda.Runtime.MixProject do
       name: "AWS Lambda Runtime",
       description:
         "A dependency-free AWS Lambda custom runtime for Elixir" <>
-          ", built on :inets/:httpc and the OTP-bundled JSON module" <>
+          ", built on :gen_tcp and the OTP-bundled JSON module" <>
           ", meant to run on a Lambda layer providing OTP.",
       source_url: @source_url,
       docs: docs()
@@ -26,7 +26,7 @@ defmodule AWS.Lambda.Runtime.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :inets],
+      extra_applications: [:logger],
       mod: {AWS.Lambda.Runtime.Application, []}
     ]
   end

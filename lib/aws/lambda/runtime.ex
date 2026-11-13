@@ -8,7 +8,7 @@ defmodule AWS.Lambda.Runtime do
        own application depends on this one, so it starts after it; polling the
        Runtime API earlier would end Lambda's init phase and run the first
        invocation against a half-started system;
-    2. start the `:httpc` profile and resolve the handler (initialisation — any
+    2. read the Runtime API endpoint and resolve the handler (initialisation — any
        failure here is reported to `/runtime/init/error` and halts the VM);
     3. long-poll `GET /runtime/invocation/next`, which is where the sandbox is
        frozen between invocations;
