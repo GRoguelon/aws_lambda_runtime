@@ -1,6 +1,8 @@
 defmodule AWS.Lambda.RuntimeTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias AWS.Lambda.Runtime.API
   alias Support.FakeRuntimeAPI
 
@@ -11,6 +13,8 @@ defmodule AWS.Lambda.RuntimeTest do
     @impl AWS.Lambda.Runtime.Handler
     def handler(%{"mode" => "error"}, _context), do: {:error, "nope"}
     def handler(%{"mode" => "raise"}, _context), do: raise("boom")
+    def handler(%{"mode" => "throw"}, _context), do: throw(:thrown)
+    def handler(%{"mode" => "exit"}, _context), do: exit(:gone)
 
     def handler(%{"mode" => "stream"}, _context) do
       {:stream, Stream.map(["a", "", "b"], & &1), content_type: "text/plain"}
@@ -203,6 +207,35 @@ defmodule AWS.Lambda.RuntimeTest do
     assert_receive {:halted, 1}, 1_000
 
     stop_runtime(runtime_pid)
+  end
+
+  describe "handler failures" do
+    test "logs a raised exception once, without the task's crash report" do
+      log =
+        capture_log(fn ->
+          {headers, _body} = invoke_and_capture(~s({"mode":"raise"}), "error")
+          assert headers["lambda-runtime-function-error-type"] == "RuntimeError"
+        end)
+
+      assert length(String.split(log, "(RuntimeError) boom")) == 2
+      refute log =~ "terminating"
+    end
+
+    @tag :capture_log
+    test "reports a thrown value as Handler.Throw" do
+      {headers, body} = invoke_and_capture(~s({"mode":"throw"}), "error")
+
+      assert headers["lambda-runtime-function-error-type"] == "Handler.Throw"
+      assert JSON.decode!(body)["errorMessage"] == ":thrown"
+    end
+
+    @tag :capture_log
+    test "reports an exit as Handler.Exit" do
+      {headers, body} = invoke_and_capture(~s({"mode":"exit"}), "error")
+
+      assert headers["lambda-runtime-function-error-type"] == "Handler.Exit"
+      assert JSON.decode!(body)["errorMessage"] == ":gone"
+    end
   end
 
   describe "streaming" do

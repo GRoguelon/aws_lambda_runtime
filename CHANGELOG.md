@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A handler that raises, throws or exits is logged once, by the runtime,
+  instead of also producing the crash report of the task it runs in. A thrown
+  value is reported as `Handler.Throw` rather than `Handler.Exit`.
 - The runtime waits until the release has started every application before
   polling the Runtime API. It used to start with `:aws_lambda_runtime`, before
   the function's own application, so the first invocation could reach a

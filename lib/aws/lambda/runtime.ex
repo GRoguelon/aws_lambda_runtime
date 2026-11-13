@@ -187,11 +187,16 @@ defmodule AWS.Lambda.Runtime do
         Logger.metadata(request_id: context.request_id)
 
         # A stream is sent from this task, so the deadline below also bounds
-        # the handler's enumerable.
-        case apply(module, function, [event, context]) do
-          {:stream, chunks} -> {:streamed, stream(context, chunks, [])}
-          {:stream, chunks, opts} -> {:streamed, stream(context, chunks, opts)}
-          result -> {:returned, result}
+        # the handler's enumerable. Failures are returned rather than let
+        # crash the task, which would log a crash report on top of ours.
+        try do
+          case apply(module, function, [event, context]) do
+            {:stream, chunks} -> {:streamed, stream(context, chunks, [])}
+            {:stream, chunks, opts} -> {:streamed, stream(context, chunks, opts)}
+            result -> {:returned, result}
+          end
+        catch
+          kind, reason -> {:failed, kind, reason, __STACKTRACE__}
         end
       end)
 
@@ -199,11 +204,12 @@ defmodule AWS.Lambda.Runtime do
       {:ok, result} ->
         result
 
+      # The task was killed from outside, e.g. by a process linked to it.
       {:exit, {exception, stacktrace}} when is_exception(exception) ->
-        {:raised, exception, stacktrace}
+        {:failed, :error, exception, stacktrace}
 
       {:exit, reason} ->
-        {:exited, reason}
+        {:failed, :exit, reason, []}
 
       nil ->
         {:timed_out, timeout}
@@ -256,19 +262,23 @@ defmodule AWS.Lambda.Runtime do
   defp stream_error(kind, reason, stacktrace) do
     Logger.error("handler failed while streaming: " <> Exception.format(kind, reason, stacktrace))
 
-    {type, message} =
-      case Exception.normalize(kind, reason, stacktrace) do
-        exception when is_exception(exception) ->
-          {inspect(exception.__struct__), Exception.message(exception)}
-
-        _reason when kind == :throw ->
-          {"Handler.Throw", describe(reason)}
-
-        _reason ->
-          {"Handler.Exit", describe(reason)}
-      end
+    {type, message} = failure(kind, reason, stacktrace)
 
     {type, error_payload(type, message, stacktrace)}
+  end
+
+  # The error type and message a raise, throw or exit is reported with.
+  defp failure(kind, reason, stacktrace) do
+    case Exception.normalize(kind, reason, stacktrace) do
+      exception when is_exception(exception) ->
+        {inspect(exception.__struct__), Exception.message(exception)}
+
+      _reason when kind == :throw ->
+        {"Handler.Throw", describe(reason)}
+
+      _reason ->
+        {"Handler.Exit", describe(reason)}
+    end
   end
 
   # Replying
@@ -290,14 +300,11 @@ defmodule AWS.Lambda.Runtime do
     respond(context, payload)
   end
 
-  defp reply({:raised, exception, stacktrace}, context) do
-    Logger.error(Exception.format(:error, exception, stacktrace))
-    report(context, inspect(exception.__struct__), Exception.message(exception), stacktrace)
-  end
+  defp reply({:failed, kind, reason, stacktrace}, context) do
+    Logger.error(Exception.format(kind, reason, stacktrace))
 
-  defp reply({:exited, reason}, context) do
-    Logger.error("handler exited: #{inspect(reason)}")
-    report(context, "Handler.Exit", describe(reason), [])
+    {type, message} = failure(kind, reason, stacktrace)
+    report(context, type, message, stacktrace)
   end
 
   defp reply({:timed_out, timeout}, context) do
