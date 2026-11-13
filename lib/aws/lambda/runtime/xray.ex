@@ -205,6 +205,18 @@ defmodule AWS.Lambda.Runtime.XRay do
   end
 
   @doc """
+  Merges `:annotations`, `:metadata`, `:http`, `:sql` and `:aws` into the
+  open subsegment, if any, as when ending it: for what is only known once it
+  has started, such as a response status.
+  """
+  @spec update_subsegment([end_option()]) :: :ok
+  def update_subsegment(opts) do
+    opts = Keyword.validate!(opts, @fields)
+
+    update_document(&put_fields(&1, opts))
+  end
+
+  @doc """
   Adds an annotation to the open subsegment, if any: a value X-Ray indexes
   for filtering traces.
   """

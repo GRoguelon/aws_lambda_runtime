@@ -206,6 +206,24 @@ defmodule AWS.Lambda.Runtime.XRayTest do
     end
   end
 
+  describe "update_subsegment/1" do
+    test "merges into the open subsegment before it ends", %{daemon: daemon} do
+      XRay.subsegment("call", fn ->
+        XRay.update_subsegment(http: %{response: %{status: 503}}, annotations: %{retried: true})
+      end)
+
+      assert %{
+               "fault" => true,
+               "http" => %{"response" => %{"status" => 503}},
+               "annotations" => %{"retried" => true}
+             } = FakeXRayDaemon.receive_document(daemon)
+    end
+
+    test "does nothing outside of a subsegment" do
+      assert XRay.update_subsegment(http: %{response: %{status: 200}}) == :ok
+    end
+  end
+
   describe "trace_header/0" do
     test "is the invocation's outside of a subsegment" do
       assert XRay.trace_header() == @sampled

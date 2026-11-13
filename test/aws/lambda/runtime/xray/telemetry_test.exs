@@ -183,6 +183,26 @@ defmodule AWS.Lambda.Runtime.XRay.TelemetryTest do
       assert url == "https://api.example.com/users"
     end
 
+    test "takes the status of a streamed response from the receive event", %{daemon: daemon} do
+      :telemetry.execute([:finch, :request, :start], %{system_time: System.system_time()}, %{
+        request: @request
+      })
+
+      :telemetry.execute([:finch, :recv, :stop], %{duration: 1}, %{
+        request: @request,
+        status: 404,
+        headers: []
+      })
+
+      :telemetry.execute([:finch, :request, :stop], %{duration: 1}, %{
+        request: @request,
+        result: {:ok, {:req_accumulator}}
+      })
+
+      assert %{"error" => true, "http" => %{"response" => %{"status" => 404}}} =
+               FakeXRayDaemon.receive_document(daemon)
+    end
+
     test "records an error result as a fault", %{daemon: daemon} do
       request(@request, {:error, %RuntimeError{message: "closed"}})
 

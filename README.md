@@ -400,33 +400,59 @@ end
   trace, and is let through.
 - A call to another service joins the trace when it carries
   `XRay.trace_header()` in its `X-Amzn-Trace-Id` header.
+- `XRay.put_annotation/2`, `XRay.put_metadata/2` and
+  `XRay.update_subsegment/1` add to the open subsegment what is only known
+  once it has started, such as a response status.
 
 Subsegments are sent over UDP to the X-Ray daemon Lambda runs in the sandbox,
 without waiting for it. Nothing is sent when the invocation isn't sampled.
+
+Traces show up in the CloudWatch console, under *X-Ray traces*, a few
+seconds after the invocation: the *Traces* page lists them (filter on
+`service("elixir-hello")`), and the *Trace Map* draws the function and the
+services it calls.
 
 ### From telemetry events
 
 When the function depends on [`:telemetry`](https://hex.pm/packages/telemetry),
 as it does through Ecto, Finch or Req, `AWS.Lambda.Runtime.XRay.Telemetry`
 records subsegments from the events these libraries emit, without wrapping
-each call. Attach it once, from the function's application:
+each call. Attach it once, from the function's application, which `mix new`
+doesn't create: declare it in `mix.exs`,
 
 ```elixir
-def start(_type, _args) do
-  AWS.Lambda.Runtime.XRay.Telemetry.attach(
-    ecto: [:hello_function, :repo],
-    finch: true,
-    spans: [[:hello_function, :checkout]]
-  )
+def application do
+  [
+    extra_applications: [:logger],
+    mod: {HelloFunction.Application, []}
+  ]
+end
+```
 
-  Supervisor.start_link([HelloFunction.Repo], strategy: :one_for_one)
+then attach the handlers when it starts:
+
+```elixir
+defmodule HelloFunction.Application do
+  use Application
+
+  @impl Application
+  def start(_type, _args) do
+    AWS.Lambda.Runtime.XRay.Telemetry.attach(
+      ecto: [:hello_function, :repo],
+      finch: true,
+      spans: [[:hello_function, :checkout]]
+    )
+
+    Supervisor.start_link([HelloFunction.Repo], strategy: :one_for_one)
+  end
 end
 ```
 
 - `ecto:` records each query of the repo with that telemetry prefix, with its
   SQL but not its parameters.
 - `finch: true` records each HTTP request made with Finch or Req, with its
-  method, URL (without its query string) and response status.
+  method, URL (without its query string) and response status. The runtime
+  doesn't start `:ssl`: add it to `extra_applications` for HTTPS requests.
 - `spans:` records each `:telemetry.span/3` call with one of these prefixes.
 
 `:telemetry` stays optional: the module is only compiled when the function

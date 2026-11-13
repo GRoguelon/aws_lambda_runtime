@@ -49,7 +49,8 @@ if Code.ensure_loaded?(:telemetry) do
     @finch_events [
       [:finch, :request, :start],
       [:finch, :request, :stop],
-      [:finch, :request, :exception]
+      [:finch, :request, :exception],
+      [:finch, :recv, :stop]
     ]
 
     @database_types %{
@@ -149,6 +150,19 @@ if Code.ensure_loaded?(:telemetry) do
 
     def handle_event([:finch, :request, :exception], _measurements, metadata, %{type: :finch}) do
       XRay.end_subsegment(exception: exception(metadata))
+    end
+
+    # Req streams the response (Finch.stream_while/5), so the request's result
+    # is Req's accumulator rather than a response: the status is taken from
+    # the receive event, emitted inside the request span.
+    def handle_event([:finch, :recv, :stop], _measurements, metadata, %{type: :finch}) do
+      case metadata[:status] do
+        status when is_integer(status) ->
+          XRay.update_subsegment(http: %{response: %{status: status}})
+
+        _status ->
+          :ok
+      end
     end
 
     ## Private functions

@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events: Ecto queries, Finch requests (Req's included) and
   `:telemetry.span/3` calls. It is only compiled when the function depends on
   `:telemetry`, an optional dependency.
+- `AWS.Lambda.Runtime.XRay.update_subsegment/1` merges annotations,
+  metadata and the `http`, `sql` and `aws` fields into the open subsegment.
 
 ### Fixed
 

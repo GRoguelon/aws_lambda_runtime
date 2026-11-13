@@ -57,5 +57,13 @@ jobs:
       - name: Compile without warnings
         run: mix compile --warnings-as-errors
 
+      # AWS.Lambda.Runtime.XRay.Telemetry is only compiled when the function
+      # depends on :telemetry: the library must build without it too. In its
+      # own _build/prod, so the dev build and its cache keep the module.
+      - name: Compile without optional dependencies
+        run: mix compile --warnings-as-errors --no-optional-deps
+        env:
+          MIX_ENV: prod
+
       - name: Run tests
         run: mix test
