@@ -2,8 +2,9 @@ defmodule AWS.Lambda.Runtime.Application do
   @moduledoc """
   OTP application entry point.
 
-  Applies the function's logging configuration (`AWS.Lambda.Runtime.Logging`),
-  then supervises the `Task.Supervisor` that bounds handler invocations and
+  Applies the function's logging configuration (`AWS.Lambda.Runtime.Logging`)
+  and installs the SIGTERM handler (`AWS.Lambda.Runtime.Shutdown`), then
+  supervises the `Task.Supervisor` that bounds handler invocations and
   the `AWS.Lambda.Runtime` loop itself, one-for-one.
 
   The runtime loop can be disabled with
@@ -22,6 +23,7 @@ defmodule AWS.Lambda.Runtime.Application do
   @impl Application
   def start(_type, _args) do
     :ok = AWS.Lambda.Runtime.Logging.configure()
+    :ok = AWS.Lambda.Runtime.Shutdown.install()
 
     children =
       [{Task.Supervisor, name: AWS.Lambda.Runtime.TaskSupervisor}] ++ runtime_child()

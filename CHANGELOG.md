@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Graceful shutdown: functions registered with
+  `AWS.Lambda.Runtime.Shutdown.register/1` run when Lambda shuts the
+  execution environment down, before the VM stops its applications. The
+  runtime then registers itself as an internal extension, so Lambda sends it
+  a SIGTERM without an extension layer.
+
 ## [0.4.1] - 2026-11-13
 
 ### Fixed

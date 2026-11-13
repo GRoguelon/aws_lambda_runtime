@@ -16,6 +16,8 @@ defmodule AWS.Lambda.Runtime.API do
 
   @api_version "2018-06-01"
 
+  @extensions_api_version "2020-01-01"
+
   @post_timeout 15_000
 
   @json_headers [{"content-type", "application/json"}]
@@ -146,6 +148,62 @@ defmodule AWS.Lambda.Runtime.API do
     "/runtime/init/error"
     |> post(encode!(payload), error_type_header(error_type))
     |> expect_accepted()
+  end
+
+  @doc """
+  Registers an extension named `name` for `events` with the Extensions API,
+  and returns its identifier.
+
+  Registered from the runtime process, it is an internal extension: Lambda
+  then sends the runtime a SIGTERM before shutting the execution environment
+  down. Must be called during the init phase, before the first
+  `next_invocation/0`.
+  """
+  def register_extension(name, events) do
+    path = "/" <> @extensions_api_version <> "/extension/register"
+    headers = [{"lambda-extension-name", name} | @json_headers]
+
+    case HTTP.request(api_endpoint(), "POST", path, headers, encode!(%{"events" => events}),
+           timeout: @post_timeout
+         ) do
+      {:ok, 200, headers, _body} ->
+        {:ok, headers["lambda-extension-identifier"]}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Long-polls `GET /extension/event/next` for the extension `id`.
+
+  Lambda only considers an extension ready, and only sends an invocation,
+  once it waits for its next event. Registered for none, the call never
+  returns.
+  """
+  def next_extension_event(id) do
+    path = "/" <> @extensions_api_version <> "/extension/event/next"
+
+    case HTTP.request(
+           api_endpoint(),
+           "GET",
+           path,
+           [{"lambda-extension-identifier", id}],
+           "",
+           timeout: :infinity
+         ) do
+      {:ok, 200, headers, body} ->
+        {:ok, headers, body}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   ## Private functions

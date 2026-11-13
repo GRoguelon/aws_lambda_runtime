@@ -209,6 +209,86 @@ defmodule AWS.Lambda.RuntimeTest do
     stop_runtime(runtime_pid)
   end
 
+  describe "shutdown" do
+    setup do
+      on_exit(fn -> :persistent_term.erase({AWS.Lambda.Runtime.Shutdown, :hooks}) end)
+    end
+
+    test "registers an internal extension when a shutdown function is registered" do
+      test_pid = self()
+      AWS.Lambda.Runtime.Shutdown.register(fn -> :ok end)
+
+      # The extension's and the runtime's requests may arrive in any order.
+      dispatch = fn
+        {"POST", "/2020-01-01/extension/register" = path, headers, body} ->
+          send(test_pid, {:registered, path, headers, body})
+          {200, %{"lambda-extension-identifier" => "ext-1"}, ~s({"functionName":"f"})}
+
+        {"GET", "/2020-01-01/extension/event/next", headers, _body} ->
+          send(test_pid, {:extension_waiting, headers})
+          {500, %{}, "stop waiting"}
+
+        {"GET", _path, _headers, _body} ->
+          {200, %{"lambda-runtime-aws-request-id" => "req-x"}, ~s({"mode":"ok"})}
+
+        {"POST", _path, _headers, body} ->
+          send(test_pid, {:posted, body})
+          {202, %{}, ""}
+      end
+
+      {_pid, endpoint} = FakeRuntimeAPI.start(List.duplicate(dispatch, 4))
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+      log =
+        capture_log(fn ->
+          runtime_pid = start_runtime!()
+
+          assert_receive {:registered, path, headers, body}, 1_000
+          assert path == "/2020-01-01/extension/register"
+          assert headers["lambda-extension-name"] == "aws_lambda_runtime"
+          assert JSON.decode!(body) == %{"events" => []}
+
+          assert_receive {:extension_waiting, headers}, 1_000
+          assert headers["lambda-extension-identifier"] == "ext-1"
+
+          assert_receive {:posted, _body}, 1_000
+
+          stop_runtime(runtime_pid)
+        end)
+
+      assert log =~ "the shutdown extension stopped waiting for events"
+    end
+
+    test "goes on without the extension when its registration fails" do
+      test_pid = self()
+      AWS.Lambda.Runtime.Shutdown.register(fn -> :ok end)
+
+      {_pid, endpoint} =
+        FakeRuntimeAPI.start([
+          fn {"POST", _path, _headers, _body} -> {500, %{}, "nope"} end,
+          fn {"GET", _path, _headers, _body} ->
+            {200, %{"lambda-runtime-aws-request-id" => "req-y"}, ~s({"mode":"ok"})}
+          end,
+          fn {"POST", _path, _headers, body} ->
+            send(test_pid, {:posted, body})
+            {202, %{}, ""}
+          end
+        ])
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+      log =
+        capture_log(fn ->
+          runtime_pid = start_runtime!()
+          assert_receive {:posted, _body}, 1_000
+          stop_runtime(runtime_pid)
+        end)
+
+      assert log =~ "could not register for SIGTERM"
+    end
+  end
+
   describe "handler failures" do
     test "logs a raised exception once, without the task's crash report" do
       log =

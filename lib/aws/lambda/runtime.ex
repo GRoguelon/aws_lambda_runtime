@@ -32,6 +32,7 @@ defmodule AWS.Lambda.Runtime do
   alias AWS.Lambda.Runtime.API
   alias AWS.Lambda.Runtime.Context
   alias AWS.Lambda.Runtime.Handler
+  alias AWS.Lambda.Runtime.Shutdown
 
   ## Module attributes
 
@@ -42,6 +43,7 @@ defmodule AWS.Lambda.Runtime do
   @default_stream_content_type "application/octet-stream"
   @stream_send_timeout 30_000
   @boot_poll_ms 1
+  @extension_name "aws_lambda_runtime"
 
   ## Public functions
 
@@ -79,6 +81,8 @@ defmodule AWS.Lambda.Runtime do
 
     {module, function} = handler
 
+    register_for_shutdown()
+
     Logger.info("runtime ready, handler #{inspect(module)}.#{function}/2")
 
     loop(handler, halt, 0)
@@ -105,6 +109,42 @@ defmodule AWS.Lambda.Runtime do
       {_internal, _provided} ->
         Process.sleep(@boot_poll_ms)
         wait_for_boot()
+    end
+  end
+
+  # Lambda only sends a SIGTERM before shutting the execution environment
+  # down when an extension is registered, which it must be before the first
+  # /next. Not being warned isn't worth failing the init phase for.
+  defp register_for_shutdown do
+    if Shutdown.registered?() do
+      case API.register_extension(@extension_name, []) do
+        {:ok, id} ->
+          # Lambda holds every invocation back until each registered
+          # extension waits for its next event.
+          {:ok, _pid} =
+            Task.Supervisor.start_child(AWS.Lambda.Runtime.TaskSupervisor, fn ->
+              poll_extension_events(id)
+            end)
+
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "could not register for SIGTERM, shutdown functions won't run: #{inspect(reason)}"
+          )
+      end
+    end
+  end
+
+  # Registered for no event, the extension gets none: the request stays
+  # pending, which is all Lambda needs.
+  defp poll_extension_events(id) do
+    case API.next_extension_event(id) do
+      {:ok, _headers, _body} ->
+        poll_extension_events(id)
+
+      {:error, reason} ->
+        Logger.warning("the shutdown extension stopped waiting for events: #{inspect(reason)}")
     end
   end
 

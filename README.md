@@ -478,6 +478,33 @@ end
 `:telemetry` stays optional: the module is only compiled when the function
 depends on it.
 
+## Graceful shutdown
+
+Lambda shuts an execution environment down after it has been idle for a
+while, or when the function is updated. To flush a buffer or close a
+connection then, register a function from the function's application:
+
+```elixir
+def start(_type, _args) do
+  AWS.Lambda.Runtime.Shutdown.register(fn -> HelloFunction.Metrics.flush() end)
+
+  Supervisor.start_link(children, strategy: :one_for_one)
+end
+```
+
+Lambda only sends a SIGTERM before shutting an environment down when an
+extension is registered in it: with a function registered, the runtime
+registers itself as an internal extension during the init phase, so no
+extension layer is needed.
+
+On SIGTERM, the registered functions run in order while every application
+is still running, `Logger` is flushed, then the VM stops its applications,
+which also runs their `stop/1` callbacks and the `terminate/2` of the
+processes trapping exits. Lambda allows about 500 milliseconds for all of
+it before killing the environment, so keep these functions short. A function
+must be registered before the first invocation for Lambda to send the
+SIGTERM.
+
 ## Embedding ERTS instead of the OTP layer
 
 With `include_erts: true`, the package carries the Erlang runtime system
