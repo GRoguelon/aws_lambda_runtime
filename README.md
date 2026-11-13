@@ -472,8 +472,7 @@ end
 - `ecto:` records each query of the repo with that telemetry prefix, with its
   SQL but not its parameters.
 - `finch: true` records each HTTP request made with Finch or Req, with its
-  method, URL (without its query string) and response status. The runtime
-  doesn't start `:ssl`: add it to `extra_applications` for HTTPS requests.
+  method, URL (without its query string) and response status.
 - `spans:` records each `:telemetry.span/3` call with one of these prefixes.
 
 `:telemetry` stays optional: the module is only compiled when the function
