@@ -148,19 +148,20 @@ options (`--release`, `--platform`, `--dep`, ...).
 Create the function once, referencing the OTP layer [published above](#the-aws-layer-for-otp):
 
 ```sh
-PLATFORM=arm64 OTP_VERSION=29.1.2; \
 aws lambda create-function \
   --function-name elixir-hello \
   --runtime provided.al2023 \
-  --architectures "$PLATFORM" \
+  --architectures arm64 \
   --role arn:aws:iam::000000000000:role/lambda-elixir \
   --handler HelloFunction \
   --zip-file fileb://function.zip \
-  --layers "arn:aws:lambda:eu-west-3:226873539218:layer:erlang-otp-${OTP_VERSION}"
+  --layers arn:aws:lambda:us-east-1:000000000000:layer:erlang-otp-29-1-2-arm64:1
 ```
 
-Replace the role ARN, layer ARN/region and account ID with your own. On
-subsequent deploys, update the function code instead of recreating it:
+Replace the role ARN with your own, and the layer ARN with the one printed
+when publishing the layer. `--architectures` (`arm64` or `x86_64`) must match
+the layer's. On subsequent deploys, update the function code instead of
+recreating it:
 
 ```sh
 aws lambda update-function-code --publish --function-name elixir-hello \
@@ -170,13 +171,19 @@ aws lambda update-function-code --publish --function-name elixir-hello \
 
 ## Performance
 
-Rough numbers for the `HelloFunction` example above, deployed with 256MB of
-memory:
+Rough numbers for the `HelloFunction` example above, deployed on arm64
+(Erlang 29.1.2, Elixir 1.20.5), medians of 20 cold starts per memory size:
 
-- **Cold start:** ~1.5-2s
-- **Execution time:** ~2ms
-- **Memory used:** ~180MB
-- **Cost:** ~$0.0000068667 per call in `us-east-1`
+| Memory | Init | First invocation | Cold start |
+|---|---|---|---|
+| 256MB | ~770–870ms | ~230ms | ~1.1s |
+| 512MB | ~740ms | ~90ms | ~850ms |
+
+- **First invocation:** it loads the modules it uses, the release booting in
+  interactive mode (see [Tuning the VM](#tuning-the-vm)). With
+  `RELEASE_MODE=embedded`, the cold start at 256MB is ~1.3s.
+- **Warm invocations:** ~2ms.
+- **Memory used:** ~85–90MB at both sizes.
 
 ## Tuning the VM
 
@@ -222,19 +229,28 @@ Download the one matching your OTP version and architecture, and publish it
 as a layer version:
 
 ```sh
-OTP_VERSION=29.1.2 PLATFORM=amd64 AWS_PROFILE=default AWS_REGION=us-east-1; \
+OTP_VERSION=29.1.2 PLATFORM=arm64 AWS_PROFILE=default AWS_REGION=us-east-1; \
+ARCH=$([ "$PLATFORM" = amd64 ] && echo x86_64 || echo arm64); \
 curl -fsSL -o layer.zip "https://github.com/GRoguelon/aws_lambda_runtime/releases/download/erlang-${OTP_VERSION}/lambda-layer-erlang-${OTP_VERSION}-${PLATFORM}.zip" \
-  && aws lambda publish-layer-version \
-       --layer-name "erlang-otp-${OTP_VERSION}" \
+  && aws --profile "$AWS_PROFILE" --region "$AWS_REGION" lambda publish-layer-version \
+       --layer-name "erlang-otp-$(echo "$OTP_VERSION" | tr . -)-${PLATFORM}" \
        --zip-file fileb://layer.zip \
-       --compatible-architectures "$PLATFORM" \
+       --compatible-architectures "$ARCH" \
        --compatible-runtimes provided.al2023 \
+       --query LayerVersionArn --output text \
   && rm layer.zip
 ```
 
-`PLATFORM` is `amd64` or `arm64` (matching Lambda's own architecture names)
-and must correspond to the architecture your function is built/deployed for.
-`OTP_VERSION` must match the version your release was compiled against.
+- `PLATFORM` is `arm64` or `amd64`, the asset to download. It must match the
+  architecture your function is built and deployed for, which Lambda names
+  `arm64` or `x86_64` (`ARCH`).
+- `OTP_VERSION` must match the version your release was compiled against.
+  Layer names can't contain dots, so the layer is named after it with dashes,
+  e.g. `erlang-otp-29-1-2-arm64`.
+
+The command prints the ARN of the layer version, e.g.
+`arn:aws:lambda:us-east-1:000000000000:layer:erlang-otp-29-1-2-arm64:1`, to
+attach to the function.
 
 ## Trademarks
 
