@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ELIXIR_ERL_OPTIONS` takes precedence.
 - `bootstrap` appends `-noinput` to `ELIXIR_ERL_OPTIONS` instead of
   overwriting it, so VM flags set in the function's environment are kept.
+- `:ssl` is no longer started: the Runtime API is plain HTTP, and starting
+  `:ssl` (with `:crypto` and `:public_key`) only slowed the cold start.
+  Handlers calling `:httpc` over HTTPS must add `:ssl` to their own
+  `extra_applications`; HTTP clients such as Req, Finch or Hackney already
+  depend on it.
 
 ## [0.2.0] - 2026-11-10
 

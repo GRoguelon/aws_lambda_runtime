@@ -121,8 +121,11 @@ defmodule AWS.Lambda.Runtime.API do
   end
 
   defp request(method, request, http_opts) do
+    # The Runtime API is plain HTTP. Without an explicit `ssl` option, httpc
+    # builds its default TLS options on every request, which calls into
+    # :public_key, an application this runtime doesn't start.
     http_opts =
-      Keyword.merge([connect_timeout: @connect_timeout, autoredirect: false], http_opts)
+      Keyword.merge([connect_timeout: @connect_timeout, autoredirect: false, ssl: []], http_opts)
 
     case :httpc.request(method, request, http_opts, [body_format: :binary], @profile) do
       {:ok, {{_http_vsn, status, _reason}, headers, body}} ->
