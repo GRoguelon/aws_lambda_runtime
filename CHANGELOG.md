@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `AWS.Lambda.Runtime.XRay` records X-Ray subsegments from a handler, sent
+  over UDP to the daemon Lambda runs when the function's tracing mode is
+  `Active`: `subsegment/3` times a function, nests in the open subsegment,
+  and records a raise, throw or exit as a fault. Nothing is sent unless the
+  invocation is sampled. `trace_header/0` returns the header for a
+  downstream call to join the trace.
+
+### Fixed
+
+- An invocation without a trace header no longer leaves the previous
+  invocation's in `_X_AMZN_TRACE_ID`.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added

@@ -390,9 +390,9 @@ defmodule AWS.Lambda.Runtime do
   end
 
   # X-Ray SDKs read the trace header off the environment, and it changes on
-  # every invocation.
+  # every invocation: one without a header must not inherit the previous one's.
   defp put_trace_id(nil) do
-    :ok
+    System.delete_env("_X_AMZN_TRACE_ID")
   end
 
   defp put_trace_id(trace_id) do

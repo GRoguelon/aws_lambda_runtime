@@ -363,6 +363,46 @@ aws lambda update-function-configuration --function-name elixir-hello \
 
 In the `Text` format, entries are written by `Logger`'s default formatter.
 
+## Tracing with X-Ray
+
+With the function's tracing mode set to `Active`, Lambda records each
+sampled invocation in [X-Ray](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html):
+its init phase, the handler's run, and the runtime's overhead. The function's
+role needs the `AWSXRayDaemonWriteAccess` managed policy, or the
+`xray:PutTraceSegments` and `xray:PutTelemetryRecords` permissions:
+
+```sh
+aws lambda update-function-configuration --function-name elixir-hello \
+  --tracing-config Mode=Active
+```
+
+`AWS.Lambda.Runtime.XRay` adds what the handler does to the trace, as
+subsegments of the invocation's segment:
+
+```elixir
+alias AWS.Lambda.Runtime.XRay
+
+def handler(%{"user_id" => id}, _context) do
+  user =
+    XRay.subsegment("load_user", fn -> Repo.get(User, id) end,
+      annotations: %{user_id: id}
+    )
+
+  {:ok, %{name: user.name}}
+end
+```
+
+- A subsegment started inside another is recorded as its child. In another
+  process, such as a `Task`, pass it the header of the one to attach to:
+  `trace_header: XRay.trace_header()`.
+- A raise, throw or exit marks the subsegment as a fault, with its stack
+  trace, and is let through.
+- A call to another service joins the trace when it carries
+  `XRay.trace_header()` in its `X-Amzn-Trace-Id` header.
+
+Subsegments are sent over UDP to the X-Ray daemon Lambda runs in the sandbox,
+without waiting for it. Nothing is sent when the invocation isn't sampled.
+
 ## The AWS Layer for OTP
 
 Because releases are built with `include_erts: false`, the function package
