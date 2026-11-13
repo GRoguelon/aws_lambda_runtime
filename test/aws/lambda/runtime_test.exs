@@ -12,6 +12,26 @@ defmodule AWS.Lambda.RuntimeTest do
     def handler(%{"mode" => "error"}, _context), do: {:error, "nope"}
     def handler(%{"mode" => "raise"}, _context), do: raise("boom")
 
+    def handler(%{"mode" => "stream"}, _context) do
+      {:stream, Stream.map(["a", "", "b"], & &1), content_type: "text/plain"}
+    end
+
+    def handler(%{"mode" => "stream_http"}, _context) do
+      {:stream, ["hi"], http: [status: 201, headers: %{"x-a" => "b"}, cookies: ["c=d"]]}
+    end
+
+    def handler(%{"mode" => "stream_raise"}, _context) do
+      {:stream,
+       Stream.map([1, 2], fn
+         1 -> "ok"
+         2 -> raise "mid-stream"
+       end)}
+    end
+
+    def handler(%{"mode" => "stream_typo"}, _context) do
+      {:stream, ["never sent"], content_typ: "text/plain"}
+    end
+
     def handler(event, context) do
       {:ok, %{"echo" => event, "request_id" => context.request_id}}
     end
@@ -183,6 +203,79 @@ defmodule AWS.Lambda.RuntimeTest do
     assert_receive {:halted, 1}, 1_000
 
     stop_runtime(runtime_pid)
+  end
+
+  describe "streaming" do
+    test "streams the chunks with the streaming headers" do
+      {headers, body} = invoke_and_capture(~s({"mode":"stream"}), "response")
+
+      assert headers["lambda-runtime-function-response-mode"] == "streaming"
+      assert headers["transfer-encoding"] == "chunked"
+      assert headers["content-type"] == "text/plain"
+      refute Map.has_key?(headers, "lambda-runtime-function-error-type")
+      assert body == "ab"
+    end
+
+    test "prepends the Function URL prelude" do
+      {headers, body} = invoke_and_capture(~s({"mode":"stream_http"}), "response")
+
+      assert headers["content-type"] == "application/vnd.awslambda.http-integration-response"
+      assert [prelude, "hi"] = :binary.split(body, <<0, 0, 0, 0, 0, 0, 0, 0>>)
+
+      assert JSON.decode!(prelude) == %{
+               "statusCode" => 201,
+               "headers" => %{"x-a" => "b", "content-type" => "application/octet-stream"},
+               "cookies" => ["c=d"]
+             }
+    end
+
+    @tag :capture_log
+    test "reports an error raised mid-stream in the trailers" do
+      {headers, body} = invoke_and_capture(~s({"mode":"stream_raise"}), "response")
+
+      assert body == "ok"
+      assert headers["lambda-runtime-function-error-type"] == "RuntimeError"
+
+      error = headers["lambda-runtime-function-error-body"] |> Base.decode64!() |> JSON.decode!()
+      assert error["errorType"] == "RuntimeError"
+      assert error["errorMessage"] == "mid-stream"
+    end
+
+    @tag :capture_log
+    test "reports invalid stream options as an error before streaming" do
+      {headers, body} = invoke_and_capture(~s({"mode":"stream_typo"}), "error")
+
+      assert headers["lambda-runtime-function-error-type"] == "ArgumentError"
+      assert JSON.decode!(body)["errorMessage"] =~ "content_typ"
+    end
+  end
+
+  # Serves one invocation of `event`, then returns the headers and body the
+  # runtime posted to /response or /error (`kind`).
+  defp invoke_and_capture(event, kind) do
+    test_pid = self()
+
+    {_pid, endpoint} =
+      FakeRuntimeAPI.start([
+        fn {"GET", _path, _headers, _body} ->
+          {200, %{"lambda-runtime-aws-request-id" => "req-s"}, event}
+        end,
+        fn {"POST", path, headers, body} ->
+          send(test_pid, {:posted, path, headers, body})
+          {202, %{}, ""}
+        end
+      ])
+
+    System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+    runtime_pid = start_runtime!(halt: halt_fun())
+
+    assert_receive {:posted, path, headers, body}, 1_000
+    assert path == "/2018-06-01/runtime/invocation/req-s/#{kind}"
+
+    stop_runtime(runtime_pid)
+
+    {headers, body}
   end
 
   defp start_runtime!(opts \\ []) do

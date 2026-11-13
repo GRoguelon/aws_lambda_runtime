@@ -169,6 +169,49 @@ aws lambda update-function-code --publish --function-name elixir-hello \
   && aws lambda wait function-updated --function-name elixir-hello
 ```
 
+## Streaming responses
+
+A handler can stream its response instead of returning it all at once, by
+returning `{:stream, chunks}` or `{:stream, chunks, opts}`, where `chunks` is
+any enumerable of iodata, such as a `Stream`:
+
+```elixir
+def handler(%{"count" => count}, _context) do
+  chunks = Stream.map(1..count, &"data: #{&1}\n\n")
+
+  {:stream, chunks,
+   content_type: "text/event-stream",
+   http: [headers: %{"cache-control" => "no-cache"}]}
+end
+```
+
+Each element is sent as soon as it is produced. `http:` sets the status,
+headers and cookies a Function URL responds with; leave it out for
+`InvokeWithResponseStream` callers. See the `AWS.Lambda.Runtime.Handler`
+moduledoc for every option, and for how an error is reported once streaming
+has started.
+
+Lambda only streams to callers that ask for it: a Function URL in
+`RESPONSE_STREAM` mode,
+
+```sh
+aws lambda create-function-url-config --function-name elixir-hello \
+  --auth-type NONE --invoke-mode RESPONSE_STREAM
+curl -N https://<url-id>.lambda-url.<region>.on.aws/
+```
+
+(`NONE` makes the URL public, and also needs a resource-based policy
+allowing it to be invoked; see the Lambda documentation on Function URLs), or
+the `InvokeWithResponseStream` API:
+
+```sh
+aws lambda invoke-with-response-stream --function-name elixir-hello \
+  --cli-binary-format raw-in-base64-out --payload '{"count": 3}' /dev/stdout
+```
+
+Other callers, the Lambda console included, receive the whole response once
+it is complete. API Gateway doesn't stream Lambda responses.
+
 ## Performance
 
 Rough numbers for the `HelloFunction` example above, deployed on arm64 with

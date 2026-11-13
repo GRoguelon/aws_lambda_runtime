@@ -20,6 +20,16 @@ defmodule AWS.Lambda.Runtime.API do
 
   @json_headers [{"content-type", "application/json"}]
 
+  @error_type_header "lambda-runtime-function-error-type"
+
+  @error_body_header "lambda-runtime-function-error-body"
+
+  # A Function URL in RESPONSE_STREAM mode reads a JSON prelude (status,
+  # headers, cookies) ended by eight NUL bytes before the body.
+  @http_integration_content_type "application/vnd.awslambda.http-integration-response"
+
+  @prelude_delimiter <<0, 0, 0, 0, 0, 0, 0, 0>>
+
   @persistent_term_key {__MODULE__, :endpoint}
 
   ## Public functions
@@ -60,6 +70,65 @@ defmodule AWS.Lambda.Runtime.API do
     |> expect_accepted()
   end
 
+  @doc """
+  Streams a successful result for `request_id`, sending each element of
+  `chunks` to the caller as it is produced.
+
+  ## Options
+
+    * `:content_type` (required) - the content type of the stream.
+    * `:prelude` - for a Function URL in `RESPONSE_STREAM` mode, a map with
+      the `"statusCode"`, `"headers"` and `"cookies"` of the HTTP response,
+      sent before the chunks. The stream is then sent as
+      `#{@http_integration_content_type}`.
+    * `:on_error` - function called with `kind, reason, stacktrace` if
+      enumerating `chunks` fails once streaming has started; returns the
+      `{error_type, payload}` to report in the trailers. Required.
+    * `:send_timeout` - in milliseconds, for each chunk written.
+  """
+  def invocation_response_stream(request_id, chunks, opts) do
+    on_error = Keyword.fetch!(opts, :on_error)
+
+    {content_type, chunks} =
+      case Keyword.get(opts, :prelude) do
+        nil ->
+          {Keyword.fetch!(opts, :content_type), chunks}
+
+        prelude ->
+          {@http_integration_content_type,
+           Stream.concat([encode!(prelude), @prelude_delimiter], chunks)}
+      end
+
+    headers = [
+      {"content-type", content_type},
+      {"lambda-runtime-function-response-mode", "streaming"},
+      {"trailer", "#{@error_type_header}, #{@error_body_header}"}
+    ]
+
+    trailers = fn
+      :ok ->
+        []
+
+      {:error, kind, reason, stacktrace} ->
+        {error_type, payload} = on_error.(kind, reason, stacktrace)
+
+        [
+          {@error_type_header, error_type},
+          {@error_body_header, payload |> JSON.encode!() |> Base.encode64()}
+        ]
+    end
+
+    path = versioned("/runtime/invocation/#{request_id}/response")
+
+    api_endpoint()
+    |> HTTP.stream_request("POST", path, headers, chunks,
+      timeout: @post_timeout,
+      send_timeout: Keyword.get(opts, :send_timeout, 30_000),
+      trailers: trailers
+    )
+    |> expect_accepted()
+  end
+
   @doc "Posts a handler failure for `request_id`."
   def invocation_error(request_id, %{} = payload, error_type) do
     "/runtime/invocation/#{request_id}/error"
@@ -82,7 +151,7 @@ defmodule AWS.Lambda.Runtime.API do
   ## Private functions
 
   defp error_type_header(error_type) do
-    [{"lambda-runtime-function-error-type", error_type}]
+    [{@error_type_header, error_type}]
   end
 
   defp post(path, body, headers) do
@@ -90,7 +159,11 @@ defmodule AWS.Lambda.Runtime.API do
   end
 
   defp request(method, path, headers, body, opts) do
-    HTTP.request(api_endpoint(), method, "/" <> @api_version <> path, headers, body, opts)
+    HTTP.request(api_endpoint(), method, versioned(path), headers, body, opts)
+  end
+
+  defp versioned(path) do
+    "/" <> @api_version <> path
   end
 
   defp expect_accepted({:ok, status, _headers, _body}) when status in 200..299 do

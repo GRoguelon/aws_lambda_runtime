@@ -25,16 +25,53 @@ defmodule AWS.Lambda.Runtime.Handler do
 
     * `{:ok, payload}` — `payload` is JSON encoded and returned to the caller
     * `{:error, reason}` — reported to Lambda as a function error
+    * `{:stream, chunks}` or `{:stream, chunks, opts}` — streams the response,
+      see below
     * anything else — encoded and returned as the payload
 
   Raising, exiting or throwing is caught by the runtime and reported as a
   function error without taking down the VM, so the sandbox stays warm.
+
+  ## Streaming
+
+  `chunks` is any enumerable of iodata, such as a `Stream`. It is consumed
+  lazily and each element is sent to the caller as soon as it is produced;
+  empty elements are skipped. The whole stream must be sent before the
+  invocation deadline.
+
+      def handler(%{"count" => count}, _context) do
+        {:stream, Stream.map(1..count, &"data: \#{&1}\\n\\n"),
+         content_type: "text/event-stream",
+         http: [headers: %{"cache-control" => "no-cache"}]}
+      end
+
+  Options:
+
+    * `:content_type` — of the stream. Defaults to `"application/octet-stream"`.
+    * `:http` — for a Function URL in `RESPONSE_STREAM` mode, the status
+      (`:status`, default `200`), `:headers` (a map) and `:cookies` (a list)
+      of its HTTP response. Without it, the chunks are sent as they are, as
+      `InvokeWithResponseStream` callers expect.
+    * `:send_timeout` — in milliseconds, how long writing one chunk may stall
+      before the stream is abandoned. Defaults to `30_000`.
+
+  Once the first chunk is sent the response is committed: an exception raised
+  while producing the rest is sent in the stream's error trailers, which
+  Lambda passes on to the caller.
+
+  Lambda only streams to callers that ask for it — a Function URL configured
+  with `RESPONSE_STREAM` or the `InvokeWithResponseStream` API; others get the
+  whole response once it is complete.
   """
 
   ## Behaviours
 
   @callback handler(event :: term(), context :: term()) ::
-              {:ok, term()} | {:error, term()} | term()
+              {:ok, term()}
+              | {:error, term()}
+              | {:stream, Enumerable.t()}
+              | {:stream, Enumerable.t(), keyword()}
+              | term()
 
   ## Module attributes
 

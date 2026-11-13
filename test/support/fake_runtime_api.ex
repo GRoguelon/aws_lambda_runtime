@@ -15,7 +15,9 @@ defmodule Support.FakeRuntimeAPI do
   the `host:port` string expected by `AWS_LAMBDA_RUNTIME_API`.
 
   Each step is a function `({method, path, headers, body} -> {status,
-  headers, body})`, invoked once per accepted connection.
+  headers, body})`, invoked once per accepted connection. A chunked request
+  body (response streaming) is decoded, and its trailers are merged into
+  `headers`.
   """
   def start(steps) when is_list(steps) do
     {:ok, listen_socket} =
@@ -54,9 +56,51 @@ defmodule Support.FakeRuntimeAPI do
     {:ok, {:http_request, method, {:abs_path, path}, _version}} = :gen_tcp.recv(socket, 0)
 
     headers = recv_headers(socket, %{})
-    body = recv_body(socket, headers)
+
+    {headers, body} =
+      if headers["transfer-encoding"] == "chunked" do
+        recv_chunks(socket, headers, [])
+      else
+        {headers, recv_body(socket, headers)}
+      end
 
     {to_string(method), path, headers, body}
+  end
+
+  defp recv_chunks(socket, headers, acc) do
+    :ok = :inet.setopts(socket, packet: :line)
+    {:ok, line} = :gen_tcp.recv(socket, 0)
+    {size, _rest} = line |> String.trim() |> Integer.parse(16)
+
+    :ok = :inet.setopts(socket, packet: :raw)
+
+    if size == 0 do
+      {recv_trailers(socket, headers, ""), IO.iodata_to_binary(acc)}
+    else
+      {:ok, chunk} = :gen_tcp.recv(socket, size)
+      {:ok, "\r\n"} = :gen_tcp.recv(socket, 2)
+      recv_chunks(socket, headers, [acc | chunk])
+    end
+  end
+
+  # Read raw up to the blank line: `packet: :line` would split a trailer
+  # longer than the receive buffer, such as a base64-encoded error body.
+  defp recv_trailers(_socket, headers, "\r\n") do
+    headers
+  end
+
+  defp recv_trailers(socket, headers, acc) do
+    if String.ends_with?(acc, "\r\n\r\n") do
+      acc
+      |> String.split("\r\n", trim: true)
+      |> Enum.reduce(headers, fn line, headers ->
+        [name, value] = String.split(line, ":", parts: 2)
+        Map.put(headers, String.downcase(name), String.trim(value))
+      end)
+    else
+      {:ok, data} = :gen_tcp.recv(socket, 0)
+      recv_trailers(socket, headers, acc <> data)
+    end
   end
 
   defp recv_headers(socket, acc) do

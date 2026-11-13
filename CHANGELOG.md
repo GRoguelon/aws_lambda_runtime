@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Response streaming: a handler returning `{:stream, chunks}` or
+  `{:stream, chunks, opts}` sends each element of the enumerable to the caller
+  as it is produced. The `:http` option adds the status, headers and cookies
+  of a Function URL in `RESPONSE_STREAM` mode; an error raised once streaming
+  has started is reported in the stream's error trailers.
+
 ### Fixed
 
 - The runtime waits until the release has started every application before

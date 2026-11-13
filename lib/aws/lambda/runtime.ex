@@ -39,6 +39,8 @@ defmodule AWS.Lambda.Runtime do
   @deadline_grace_ms 500
   @backoff_ms 200
   @max_next_attempts 5
+  @default_stream_content_type "application/octet-stream"
+  @stream_send_timeout 30_000
   @boot_poll_ms 1
 
   ## Public functions
@@ -183,12 +185,19 @@ defmodule AWS.Lambda.Runtime do
     task =
       Task.Supervisor.async_nolink(AWS.Lambda.Runtime.TaskSupervisor, fn ->
         Logger.metadata(request_id: context.request_id)
-        apply(module, function, [event, context])
+
+        # A stream is sent from this task, so the deadline below also bounds
+        # the handler's enumerable.
+        case apply(module, function, [event, context]) do
+          {:stream, chunks} -> {:streamed, stream(context, chunks, [])}
+          {:stream, chunks, opts} -> {:streamed, stream(context, chunks, opts)}
+          result -> {:returned, result}
+        end
       end)
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} ->
-        {:returned, result}
+        result
 
       {:exit, {exception, stacktrace}} when is_exception(exception) ->
         {:raised, exception, stacktrace}
@@ -211,7 +220,62 @@ defmodule AWS.Lambda.Runtime do
     end
   end
 
+  # Streaming
+
+  defp stream(context, chunks, opts) do
+    opts =
+      Keyword.validate!(opts,
+        content_type: @default_stream_content_type,
+        http: nil,
+        send_timeout: @stream_send_timeout
+      )
+
+    prelude = opts[:http] && prelude(opts[:http], opts[:content_type])
+
+    {"response",
+     API.invocation_response_stream(context.request_id, chunks,
+       content_type: opts[:content_type],
+       prelude: prelude,
+       send_timeout: opts[:send_timeout],
+       on_error: &stream_error/3
+     )}
+  end
+
+  defp prelude(http, content_type) do
+    http = Keyword.validate!(http, status: 200, headers: %{}, cookies: [])
+
+    %{
+      "statusCode" => http[:status],
+      "headers" => Map.put_new(http[:headers], "content-type", content_type),
+      "cookies" => http[:cookies]
+    }
+  end
+
+  # Once the first chunk is sent the response is committed: the error can
+  # only travel in the stream's trailers.
+  defp stream_error(kind, reason, stacktrace) do
+    Logger.error("handler failed while streaming: " <> Exception.format(kind, reason, stacktrace))
+
+    {type, message} =
+      case Exception.normalize(kind, reason, stacktrace) do
+        exception when is_exception(exception) ->
+          {inspect(exception.__struct__), Exception.message(exception)}
+
+        _reason when kind == :throw ->
+          {"Handler.Throw", describe(reason)}
+
+        _reason ->
+          {"Handler.Exit", describe(reason)}
+      end
+
+    {type, error_payload(type, message, stacktrace)}
+  end
+
   # Replying
+
+  defp reply({:streamed, posted}, _context) do
+    posted
+  end
 
   defp reply({:returned, {:ok, payload}}, context) do
     respond(context, payload)
@@ -258,13 +322,17 @@ defmodule AWS.Lambda.Runtime do
   end
 
   defp report(context, type, message, stacktrace) do
-    payload = %{
+    payload = error_payload(type, message, stacktrace)
+
+    {"error", API.invocation_error(context.request_id, payload, type)}
+  end
+
+  defp error_payload(type, message, stacktrace) do
+    %{
       "errorType" => type,
       "errorMessage" => message,
       "stackTrace" => Enum.map(stacktrace, &Exception.format_stacktrace_entry/1)
     }
-
-    {"error", API.invocation_error(context.request_id, payload, type)}
   end
 
   # Initialisation failure
@@ -281,14 +349,7 @@ defmodule AWS.Lambda.Runtime do
 
     Logger.error("initialisation failed: #{message}")
 
-    API.init_error(
-      %{
-        "errorType" => type,
-        "errorMessage" => message,
-        "stackTrace" => Enum.map(stacktrace, &Exception.format_stacktrace_entry/1)
-      },
-      type
-    )
+    API.init_error(error_payload(type, message, stacktrace), type)
 
     Logger.flush()
     System.halt(1)
