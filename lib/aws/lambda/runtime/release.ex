@@ -98,7 +98,7 @@ defmodule AWS.Lambda.Runtime.Release do
 
   @doc """
   Release step copying the shared libraries ERTS needs and the Lambda sandbox
-  lacks (`libcrypto`, `libssl`, `libtinfo`, `libstdc++`…) into the release's
+  lacks (`libcrypto`, `libtinfo`, `libstdc++`…) into the release's
   `lib/` directory, which Lambda puts on `LD_LIBRARY_PATH`. The OTP layer
   ships them in `/opt/lib`, so a release embedding ERTS must carry them.
 

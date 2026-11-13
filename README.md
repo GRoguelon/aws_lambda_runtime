@@ -16,7 +16,7 @@ Add `aws_lambda_runtime` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:aws_lambda_runtime, "~> 0.3.0"}
+    {:aws_lambda_runtime, "~> 0.4.0"}
   ]
 end
 ```
@@ -40,7 +40,7 @@ Add `aws_lambda_runtime` to `deps/0` in `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:aws_lambda_runtime, "~> 0.3.0"}
+    {:aws_lambda_runtime, "~> 0.4.0"}
   ]
 end
 ```
@@ -492,7 +492,7 @@ releases: [
 ```
 
 The release then also carries the shared libraries the OTP layer ships
-alongside ERTS and the Lambda sandbox lacks (`libcrypto`, `libssl`,
+alongside ERTS and the Lambda sandbox lacks (`libcrypto`,
 `libtinfo`, `libstdc++`…), in its `lib/` directory, which Lambda puts on
 `LD_LIBRARY_PATH`. Both come from the builder image, so the release must be
 built with `mix aws_lambda.build`: built elsewhere, say with `mix release` on

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-13
 
 ### Added
 
@@ -27,13 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Handler* setting.
 - Releases built with `include_erts: true` run without the OTP layer:
   `AWS.Lambda.Runtime.Release.bundle_shared_libs/1`, added after `:assemble`,
-  copies the shared libraries the layer provides (`libcrypto`, `libssl`,
-  `libtinfo`…) into the release.
+  copies the shared libraries the layer provides (`libcrypto`,
+  `libtinfo`, `libstdc++`…) into the release.
 
 ### Fixed
 
 - An invocation without a trace header no longer leaves the previous
   invocation's in `_X_AMZN_TRACE_ID`.
+
+[0.4.0]: https://github.com/GRoguelon/aws_lambda_runtime/releases/tag/v0.4.0
 
 ## [0.3.0] - 2026-11-13
 
