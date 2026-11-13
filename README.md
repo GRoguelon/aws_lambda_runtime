@@ -178,6 +178,27 @@ memory:
 - **Memory used:** ~180MB
 - **Cost:** ~$0.0000068667 per call in `us-east-1`
 
+## Tuning the VM
+
+The release ships a `vm.args` tuned for Lambda: no scheduler busy waiting, no
+distribution, and one scheduler per vCPU Lambda allocates, derived from the
+function's memory size at start.
+
+Any other [`erl` flag](https://www.erlang.org/doc/apps/erts/erl_cmd.html) can
+be added through the function's `ELIXIR_ERL_OPTIONS` environment variable,
+without rebuilding the package. For instance, a handler building large terms
+may garbage collect less with a bigger initial process heap (`+hms`, in words;
+the default is 233):
+
+```sh
+aws lambda update-function-configuration --function-name elixir-hello \
+  --environment '{"Variables": {"ELIXIR_ERL_OPTIONS": "+hms 1024"}}'
+```
+
+`--environment` replaces all the function's variables, so include the existing
+ones. An `+S` given this way overrides the scheduler count derived from the
+memory size.
+
 ## The AWS Layer for OTP
 
 Because releases are built with `include_erts: false`, the function package

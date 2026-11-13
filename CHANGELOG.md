@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ELIXIR_ERL_OPTIONS` takes precedence.
 - `bootstrap` appends `-noinput` to `ELIXIR_ERL_OPTIONS` instead of
   overwriting it, so VM flags set in the function's environment are kept.
+- `vm.args` no longer sets `+hms 1024`, which made every process start with a
+  heap over four times the VM default (233 words). Set it through
+  `ELIXIR_ERL_OPTIONS` if a handler benefits from it.
 - `:ssl` is no longer started: the Runtime API is plain HTTP, and starting
   `:ssl` (with `:crypto` and `:public_key`) only slowed the cold start.
   Handlers calling `:httpc` over HTTPS must add `:ssl` to their own

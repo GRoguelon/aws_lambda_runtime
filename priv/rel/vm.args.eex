@@ -13,6 +13,3 @@
 
 ## Nothing to connect to, and no epmd running in the sandbox.
 -start_epmd false
-
-## Slightly smaller initial process heaps: most Lambda handlers are short lived.
-+hms 1024
