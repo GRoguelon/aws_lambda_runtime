@@ -5,19 +5,21 @@ defmodule AWS.Lambda.Runtime.Handler do
 
   ## Accepted handler strings
 
-      MyLambda.Handler                  # calls MyLambda.Handler.handle_event/2
-      MyLambda.Handler.handle_event     # explicit function
+      MyLambda.Handler                  # calls MyLambda.Handler.handler/2
+      MyLambda.Handler.process          # calls MyLambda.Handler.process/2
       Elixir.MyLambda.Handler.process   # the Elixir. prefix is optional
 
   The rule is simple: if the last dot-separated segment starts with a lowercase
   letter or underscore it is taken as the function name, otherwise the whole
-  string is the module and `handle_event/2` is assumed.
+  string is the module and `handler/2` is assumed.
 
-  A compile-time override can be set with
+  The handler can also be set in the application config, as a module, a
+  `{module, function}` pair or a handler string:
 
-      config :aws_lambda_runtime, :handler, {MyLambda.Handler, :handle_event}
+      config :aws_lambda_runtime, :handler, {MyLambda.Handler, :process}
 
-  which takes precedence over `_HANDLER` and is handy for local testing.
+  The config takes precedence over `_HANDLER`, so the function's *Handler*
+  setting is then ignored. Handy for local testing.
 
   ## Return values
 

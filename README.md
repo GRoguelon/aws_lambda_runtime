@@ -91,8 +91,8 @@ releases: [
 ### 3. Write a handler
 
 A handler is any module that implements the `AWS.Lambda.Runtime.Handler`
-behaviour — a `handle_event/2`-shaped function receiving the decoded event
-and an `AWS.Lambda.Runtime.Context` struct:
+behaviour — a `handler/2` function receiving the decoded event and an
+`AWS.Lambda.Runtime.Context` struct:
 
 ```elixir
 defmodule HelloFunction do
@@ -114,14 +114,14 @@ defmodule HelloFunction do
 end
 ```
 
-Point the function's *Handler* setting at it, e.g. `HelloFunction` or
-`HelloFunction.handler` — see the `AWS.Lambda.Runtime.Handler` moduledoc for
-every accepted format.
+Lambda passes the function's *Handler* setting to the runtime, which calls
+the module it names: `HelloFunction` (calls `handler/2`) or
+`HelloFunction.some_function` — see the `AWS.Lambda.Runtime.Handler`
+moduledoc for every accepted format. It is set when creating the function in
+step 5.
 
-### 4. Configure the handler
-
-Set the `:aws_lambda_runtime, :handler` config to the module from step 3, in
-`config/config.exs`:
+The handler can be set in `config/config.exs` instead, which takes precedence
+over the *Handler* setting:
 
 ```elixir
 import Config
@@ -129,7 +129,7 @@ import Config
 config :aws_lambda_runtime, handler: HelloFunction
 ```
 
-### 5. Build and deploy
+### 4. Build and deploy
 
 ```sh
 mix aws_lambda.build 29.1.2 1.20.5 --output .
@@ -143,7 +143,7 @@ matches the target `provided.al2023` runtime regardless of your local
 OS/architecture. See `mix help aws_lambda.build` for the full list of
 options (`--release`, `--platform`, `--dep`, ...).
 
-### 6. Push to AWS
+### 5. Push to AWS
 
 Create the function once, referencing the OTP layer [published above](#the-aws-layer-for-otp):
 
@@ -154,7 +154,7 @@ aws lambda create-function \
   --runtime provided.al2023 \
   --architectures "$PLATFORM" \
   --role arn:aws:iam::000000000000:role/lambda-elixir \
-  --handler bootstrap \
+  --handler HelloFunction \
   --zip-file fileb://function.zip \
   --layers "arn:aws:lambda:eu-west-3:226873539218:layer:erlang-otp-${OTP_VERSION}"
 ```
