@@ -315,12 +315,15 @@ def handle(%Request{query: %{"stream" => count}}, _context, _state) do
 end
 ```
 
-Create a URL in `RESPONSE_STREAM` mode, allow it to be called, and call it
-with `curl -N`, which prints each chunk as it arrives:
+Create a URL in `RESPONSE_STREAM` mode, tell the runtime so (see below),
+allow it to be called, and call it with `curl -N`, which prints each chunk as
+it arrives:
 
 ```sh
 aws lambda create-function-url-config --function-name elixir-hello \
   --auth-type NONE --invoke-mode RESPONSE_STREAM --query FunctionUrl --output text
+aws lambda update-function-configuration --function-name elixir-hello \
+  --environment '{"Variables": {"FUNCTION_URL_INVOKE_MODE": "RESPONSE_STREAM"}}'
 aws lambda add-permission --function-name elixir-hello \
   --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
   --principal "*" --function-url-auth-type NONE
@@ -343,6 +346,31 @@ chunk 2 of 4
 chunk 3 of 4
 chunk 4 of 4
 ```
+
+### The Function URL's invoke mode
+
+Lambda reads a Function URL's response differently in each of its invoke
+modes, without telling the function which one the URL uses: in
+`RESPONSE_STREAM` mode it only reads a stream, in `BUFFERED` mode, the
+default, only a response sent at once. The runtime sends either, whatever the
+handler returns, once it knows the URL's mode, which it takes from, by
+priority:
+
+1. the function's `FUNCTION_URL_INVOKE_MODE` environment variable,
+   `RESPONSE_STREAM` or `BUFFERED`, so the mode can follow the URL's without
+   a new deployment (`--environment` replaces all the function's variables,
+   so include the existing ones);
+2. `config :aws_lambda_runtime, function_url: :response_stream` (or
+   `:buffered`);
+3. `BUFFERED`, the URL's default.
+
+In `BUFFERED` mode, and for API Gateway, a `{:stream, …}` response is sent
+once complete; with the wrong mode, the caller gets an empty body or the
+response's envelope instead of its body.
+
+To change a URL's mode, change the variable along with it. Lambda takes a few
+minutes to apply the new mode everywhere: until then, some responses come
+back with an empty body, whatever the function sends.
 
 `NONE` makes the URL public: anyone with it can invoke the function. It
 needs both permissions, and `--invoked-via-function-url` limits the second

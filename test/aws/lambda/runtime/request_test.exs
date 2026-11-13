@@ -104,6 +104,19 @@ defmodule AWS.Lambda.Runtime.RequestTest do
     end
   end
 
+  describe "from_event/1 sources" do
+    test "tells a Function URL from API Gateway by its domain" do
+      assert {:ok, %Request{source: :function_url}} = Request.from_event(@v2)
+
+      api =
+        put_in(@v2, ["requestContext", "domainName"], "abc.execute-api.eu-west-3.amazonaws.com")
+
+      assert {:ok, %Request{source: :api_gateway}} = Request.from_event(api)
+
+      assert {:ok, %Request{source: :api_gateway}} = Request.from_event(@v1)
+    end
+  end
+
   describe "from_event/1 with payload format 1.0" do
     test "decodes the request" do
       assert {:ok, request} = Request.from_event(@v1)

@@ -25,6 +25,7 @@ defmodule AWS.Lambda.Runtime.Request do
     * `:path_params` - the path parameters of an API Gateway route.
     * `:source_ip` - the client's IP address.
     * `:event` - the invocation's event, for anything else.
+    * `:source` - `:function_url` or `:api_gateway`.
     * `:format` - the payload format, `:v2` or `:v1`, which sets the format
       of the response.
 
@@ -44,6 +45,7 @@ defmodule AWS.Lambda.Runtime.Request do
           path_params: %{String.t() => String.t()},
           source_ip: String.t() | nil,
           event: map(),
+          source: :function_url | :api_gateway,
           format: :v1 | :v2
         }
 
@@ -58,6 +60,7 @@ defmodule AWS.Lambda.Runtime.Request do
             path_params: %{},
             source_ip: nil,
             event: %{},
+            source: :api_gateway,
             format: :v2
 
   ## Public functions
@@ -84,6 +87,7 @@ defmodule AWS.Lambda.Runtime.Request do
       path_params: event["pathParameters"] || %{},
       source_ip: http["sourceIp"],
       event: event,
+      source: source(event),
       format: :v2
     })
   end
@@ -101,6 +105,7 @@ defmodule AWS.Lambda.Runtime.Request do
       path_params: event["pathParameters"] || %{},
       source_ip: get_in(context, ["identity", "sourceIp"]),
       event: event,
+      source: :api_gateway,
       format: :v1
     })
   end
@@ -109,7 +114,31 @@ defmodule AWS.Lambda.Runtime.Request do
     :error
   end
 
+  @doc false
+  # The request a body that can't be decoded came in, to answer it in its
+  # format.
+  @spec unreadable(map()) :: t()
+  def unreadable(event) do
+    case event do
+      %{"version" => "2.0"} -> %__MODULE__{event: event, source: source(event), format: :v2}
+      _v1 -> %__MODULE__{event: event, source: :api_gateway, format: :v1}
+    end
+  end
+
   ## Private functions
+
+  # A Function URL's domain is <url-id>.lambda-url.<region>.on.aws.
+  defp source(event) do
+    case get_in(event, ["requestContext", "domainName"]) do
+      domain when is_binary(domain) ->
+        if domain =~ ~r/\.lambda-url\.[a-z0-9-]+\.on\.aws\z/,
+          do: :function_url,
+          else: :api_gateway
+
+      _none ->
+        :api_gateway
+    end
+  end
 
   defp build(event, headers, request) do
     with {:ok, raw} <- raw_body(event),

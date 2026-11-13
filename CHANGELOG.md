@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can't be decoded is answered with a `400`, a request no clause matches with
   a `404`, and another event no clause matches with a `Runtime.UnhandledEvent`
   error. `handler/2` is still supported.
+- The runtime answers a Function URL in the format its invoke mode reads,
+  which Lambda doesn't tell it: the function's `FUNCTION_URL_INVOKE_MODE`
+  (`RESPONSE_STREAM` or `BUFFERED`), else
+  `config :aws_lambda_runtime, :function_url`, else `BUFFERED`. `{:ok, …}` is
+  then streamed as one chunk in `RESPONSE_STREAM` mode, and `{:stream, …}`
+  sent once complete in `BUFFERED` mode and to API Gateway, whose callers
+  otherwise got the response's envelope as its body, or an empty body.
+  `AWS.Lambda.Runtime.Request` tells them apart in `:source`.
 - `handle/3` receives events from SQS, SNS, S3, EventBridge, Kinesis and
   DynamoDB Streams as structs (`AWS.Lambda.Runtime.Events`): S3 keys
   URL-decoded, Kinesis data decoded from base64, DynamoDB images as plain
@@ -28,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `{:ok, body, opts}` sets the `:status`, `:headers` and `:cookies` of the
   HTTP response to a request, encoded as the Function URL or API Gateway
   expects it, and `:content_type` returns a binary body as is. Streams take
-  the same HTTP options, which `http:` still sets too.
+  the same HTTP options, which `http:` still sets too. Header names are sent
+  lowercased, a stream's included.
 - Graceful shutdown: functions registered with
   `AWS.Lambda.Runtime.Shutdown.register/1` run when Lambda shuts the
   execution environment down, before the VM stops its applications. The

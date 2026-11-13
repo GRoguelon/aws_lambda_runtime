@@ -110,6 +110,19 @@ defmodule AWS.Lambda.Runtime.Handler do
   with `RESPONSE_STREAM` or the `InvokeWithResponseStream` API; others get the
   whole response once it is complete.
 
+  ## Function URLs
+
+  Lambda reads a Function URL's response differently in each of its invoke
+  modes, without telling the function which one the URL uses: in
+  `RESPONSE_STREAM` mode it only reads a stream, in `BUFFERED` mode only a
+  response sent at once. The runtime takes the mode from the function's
+  `FUNCTION_URL_INVOKE_MODE` environment variable (`RESPONSE_STREAM` or
+  `BUFFERED`), else from `config :aws_lambda_runtime, :function_url`
+  (`:response_stream` or `:buffered`), else uses `BUFFERED`, the URL's
+  default. It then sends `{:ok, …}` as a stream of one chunk in
+  `RESPONSE_STREAM` mode, and collects `{:stream, …}`'s chunks into one
+  response in `BUFFERED` mode, as it does for API Gateway.
+
   ## Accepted handler strings
 
       MyLambda.Handler                  # calls handle/3, or handler/2

@@ -367,6 +367,8 @@ defmodule AWS.Lambda.RuntimeTest do
 
       on_exit(fn ->
         Application.delete_env(:aws_lambda_runtime, :test_pid)
+        Application.delete_env(:aws_lambda_runtime, :function_url)
+        System.delete_env("FUNCTION_URL_INVOKE_MODE")
         :persistent_term.erase({AWS.Lambda.Runtime.Shutdown, :hooks})
       end)
     end
@@ -463,8 +465,10 @@ defmodule AWS.Lambda.RuntimeTest do
     end
 
     @tag :capture_log
-    test "streams a request's response with its HTTP options" do
-      {path, headers, body} = invoke(http("GET", "/stream"))
+    test "streams to a Function URL in RESPONSE_STREAM mode, with the HTTP options" do
+      System.put_env("FUNCTION_URL_INVOKE_MODE", "RESPONSE_STREAM")
+
+      {path, headers, body} = invoke(url("GET", "/stream"))
 
       assert path == "/2018-06-01/runtime/invocation/req-h/response"
       assert headers["content-type"] == "application/vnd.awslambda.http-integration-response"
@@ -475,6 +479,86 @@ defmodule AWS.Lambda.RuntimeTest do
                JSON.decode!(prelude)
 
       assert chunks == "ab"
+    end
+
+    @tag :capture_log
+    test "streams {:ok, …} as one chunk to a Function URL in RESPONSE_STREAM mode" do
+      System.put_env("FUNCTION_URL_INVOKE_MODE", "response_stream")
+
+      {_path, headers, body} = invoke(url("GET", "/hello", "name=Ada"))
+
+      assert headers["content-type"] == "application/vnd.awslambda.http-integration-response"
+
+      [prelude, chunk] = String.split(body, <<0, 0, 0, 0, 0, 0, 0, 0>>, parts: 2)
+
+      assert %{
+               "statusCode" => 201,
+               "headers" => %{"content-type" => "application/json", "x-custom" => "1"},
+               "cookies" => ["a=b; Path=/"]
+             } = JSON.decode!(prelude)
+
+      assert JSON.decode!(chunk) == %{"greeting" => "hello", "name" => "Ada"}
+    end
+
+    @tag :capture_log
+    test "takes the Function URL's mode from the config, the variable first" do
+      Application.put_env(:aws_lambda_runtime, :function_url, :response_stream)
+
+      {_path, headers, _body} = invoke(url("GET", "/text"))
+      assert headers["content-type"] == "application/vnd.awslambda.http-integration-response"
+
+      System.put_env("FUNCTION_URL_INVOKE_MODE", "BUFFERED")
+
+      {_path, headers, body} = invoke(url("GET", "/text"))
+      assert headers["content-type"] == "application/json"
+      assert %{"body" => "plain"} = JSON.decode!(body)
+    end
+
+    @tag :capture_log
+    test "collects a stream into the envelope of a buffered Function URL or API Gateway" do
+      for event <- [url("GET", "/stream"), http("GET", "/stream")] do
+        System.put_env("FUNCTION_URL_INVOKE_MODE", "BUFFERED")
+        {_path, _headers, buffered_url} = invoke(event)
+
+        assert %{
+                 "statusCode" => 202,
+                 "headers" => %{"content-type" => "text/plain"},
+                 "body" => "ab"
+               } = JSON.decode!(buffered_url)
+      end
+
+      # API Gateway doesn't read a stream, whatever the URL's mode.
+      System.put_env("FUNCTION_URL_INVOKE_MODE", "RESPONSE_STREAM")
+      {_path, _headers, api_gateway} = invoke(http("GET", "/stream"))
+
+      assert %{"statusCode" => 202, "body" => "ab"} = JSON.decode!(api_gateway)
+    end
+
+    test "reports an unknown FUNCTION_URL_INVOKE_MODE as an init error" do
+      System.put_env("FUNCTION_URL_INVOKE_MODE", "STREAMING")
+      test_pid = self()
+
+      {_pid, endpoint} =
+        FakeRuntimeAPI.start([
+          fn {"POST", _path, headers, body} ->
+            send(test_pid, {:init_error, headers, body})
+            {202, %{}, ""}
+          end
+        ])
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+
+      capture_log(fn ->
+        start_runtime!(halt: halt_fun())
+
+        assert_receive {:init_error, headers, body}, 1_000
+        assert_receive {:halted, 1}, 1_000
+
+        assert headers["lambda-runtime-function-error-type"] == "ArgumentError"
+
+        assert JSON.decode!(body)["errorMessage"] =~
+                 ~s(must be RESPONSE_STREAM or BUFFERED, got: "STREAMING")
+      end)
     end
 
     test "answers 404 when no clause matches a request" do
@@ -576,6 +660,13 @@ defmodule AWS.Lambda.RuntimeTest do
         assert headers["lambda-runtime-function-error-type"] == "Runtime.InitError"
         assert JSON.decode!(body)["errorMessage"] == "init/1 failed: :no_table"
       end)
+    end
+
+    defp url(method, path, query \\ "") do
+      method
+      |> http(path)
+      |> Map.put("rawQueryString", query)
+      |> put_in(["requestContext", "domainName"], "abc123.lambda-url.eu-west-3.on.aws")
     end
 
     defp http(method, path) do

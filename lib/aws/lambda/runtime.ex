@@ -75,24 +75,28 @@ defmodule AWS.Lambda.Runtime do
 
     wait_for_boot()
 
-    {handler, state} =
+    setup =
       try do
         :ok = API.setup()
+        function_url = function_url_mode!()
         {module, _function, _arity} = handler = Handler.resolve!()
-        {handler, init_handler(module)}
+        %{handler: handler, state: init_handler(module), function_url: function_url}
       catch
         kind, reason ->
           fail_init(kind, reason, __STACKTRACE__, halt)
       end
 
-    {module, function, arity} = handler
+    {module, function, arity} = setup.handler
 
-    register_terminate(module, state)
+    register_terminate(module, setup.state)
     register_for_shutdown()
 
-    Logger.info("runtime ready, handler #{inspect(module)}.#{function}/#{arity}")
+    Logger.info(
+      "runtime ready, handler #{inspect(module)}.#{function}/#{arity}, " <>
+        "function URL mode #{setup.function_url}"
+    )
 
-    loop(handler, state, halt, 0)
+    loop(setup, halt, 0)
   end
 
   ## Private functions
@@ -120,6 +124,37 @@ defmodule AWS.Lambda.Runtime do
   end
 
   # Handler
+
+  # How the function's URL, if any, invokes it: Lambda doesn't say, and each
+  # mode only reads one kind of response.
+  defp function_url_mode! do
+    case System.get_env("FUNCTION_URL_INVOKE_MODE", "") |> String.trim() |> String.upcase() do
+      "" ->
+        configured_function_url_mode!()
+
+      "RESPONSE_STREAM" ->
+        :response_stream
+
+      "BUFFERED" ->
+        :buffered
+
+      other ->
+        raise ArgumentError,
+              "FUNCTION_URL_INVOKE_MODE must be RESPONSE_STREAM or BUFFERED, got: #{inspect(other)}"
+    end
+  end
+
+  defp configured_function_url_mode! do
+    case Application.get_env(:aws_lambda_runtime, :function_url, :buffered) do
+      mode when mode in [:buffered, :response_stream] ->
+        mode
+
+      other ->
+        raise ArgumentError,
+              "config :aws_lambda_runtime, :function_url must be :buffered or :response_stream, " <>
+                "got: #{inspect(other)}"
+    end
+  end
 
   # Called once wait_for_boot/0 has seen every application started, so init/1
   # can use what the function's application started, such as an Ecto repo.
@@ -187,7 +222,7 @@ defmodule AWS.Lambda.Runtime do
 
   # Loop
 
-  defp loop(handler, state, halt, failures) do
+  defp loop(setup, halt, failures) do
     case API.next_invocation() do
       {:ok, headers, raw_event} ->
         context = Context.from_headers(headers)
@@ -196,11 +231,11 @@ defmodule AWS.Lambda.Runtime do
 
         put_trace_id(context.trace_id)
 
-        handler
-        |> process(context, raw_event, state)
+        setup
+        |> process(context, raw_event)
         |> posted(halt)
 
-        loop(handler, state, halt, 0)
+        loop(setup, halt, 0)
 
       {:error, {:unexpected_status, status, body}} ->
         # The Runtime API answered: retrying won't change its mind.
@@ -212,7 +247,7 @@ defmodule AWS.Lambda.Runtime do
 
         Process.sleep(@backoff_ms)
 
-        loop(handler, state, halt, failures + 1)
+        loop(setup, halt, failures + 1)
 
       {:error, reason} ->
         fatal(halt, "could not fetch the next invocation: #{inspect(reason)}")
@@ -237,20 +272,22 @@ defmodule AWS.Lambda.Runtime do
     halt.(1)
   end
 
-  defp process({module, function, arity}, context, raw_event, state) do
+  defp process(%{handler: {module, function, arity}} = setup, context, raw_event) do
     case decode_event(raw_event) do
       {:ok, event} ->
         case input(event, arity) do
           {:ok, input} ->
-            args = if arity == 3, do: [input, context, state], else: [input, context]
+            args = if arity == 3, do: [input, context, setup.state], else: [input, context]
+            http = http_reply(input, setup.function_url)
 
             context
-            |> invoke(module, function, args, input)
-            |> reply(context, input)
+            |> invoke(module, function, args, input, http)
+            |> reply(context, input, http)
 
           {:error, message, request} ->
             Logger.info("bad request, not calling the handler: #{message}")
-            respond(context, request, %{"message" => message}, status: 400)
+            http = http_reply(request, setup.function_url)
+            respond(context, request, %{"message" => message}, [status: 400], http)
 
           {:malformed, message} ->
             Logger.error("malformed event, not calling the handler: #{message}")
@@ -274,7 +311,7 @@ defmodule AWS.Lambda.Runtime do
   defp input(event, 3) do
     case Request.from_event(event) do
       {:ok, request} -> {:ok, request}
-      {:error, message} -> {:error, message, %Request{event: event, format: format(event)}}
+      {:error, message} -> {:error, message, Request.unreadable(event)}
       :error -> service_event(event)
     end
   end
@@ -291,10 +328,7 @@ defmodule AWS.Lambda.Runtime do
     end
   end
 
-  defp format(%{"version" => "2.0"}), do: :v2
-  defp format(_event), do: :v1
-
-  defp invoke(context, module, function, args, input) do
+  defp invoke(context, module, function, args, input, http) do
     timeout = invocation_timeout(context)
 
     task =
@@ -307,10 +341,10 @@ defmodule AWS.Lambda.Runtime do
         try do
           case apply(module, function, args) do
             {:stream, chunks} ->
-              {:streamed, stream(context, chunks, stream_opts([], input))}
+              streamed_or_collected(context, chunks, [], input, http)
 
             {:stream, chunks, opts} ->
-              {:streamed, stream(context, chunks, stream_opts(opts, input))}
+              streamed_or_collected(context, chunks, opts, input, http)
 
             result ->
               {:returned, result}
@@ -374,6 +408,28 @@ defmodule AWS.Lambda.Runtime do
      )}
   end
 
+  # A request answered with the envelope gets the stream's chunks collected
+  # into its body, here in the task, so the deadline still bounds them.
+  defp streamed_or_collected(_context, chunks, opts, _input, :envelope) do
+    opts = Keyword.validate!(opts, [:content_type, :http, :send_timeout | @http_options])
+    {http, opts} = Keyword.split(opts, @http_options)
+    content_type = Keyword.get(opts, :content_type, @default_stream_content_type)
+    body = chunks |> Enum.to_list() |> IO.iodata_to_binary()
+
+    {:returned, {:ok, body, [content_type: content_type] ++ Keyword.get(opts, :http, http)}}
+  end
+
+  defp streamed_or_collected(context, chunks, opts, input, _http) do
+    {:streamed, stream(context, chunks, stream_opts(opts, input))}
+  end
+
+  # How a request's response must be sent: Lambda only reads a stream with
+  # a prelude from a Function URL in RESPONSE_STREAM mode, and only an
+  # envelope otherwise. nil for any other event.
+  defp http_reply(%Request{source: :function_url}, :response_stream), do: :stream
+  defp http_reply(%Request{}, _function_url), do: :envelope
+  defp http_reply(_event, _function_url), do: nil
+
   # For a request, the HTTP options make the prelude; :http, which
   # handler/2 sets them with, still wins.
   defp stream_opts(opts, %Request{}) do
@@ -390,9 +446,16 @@ defmodule AWS.Lambda.Runtime do
 
     %{
       "statusCode" => http[:status],
-      "headers" => Map.put_new(http[:headers], "content-type", content_type),
+      "headers" =>
+        http[:headers] |> downcase_headers() |> Map.put_new("content-type", content_type),
       "cookies" => http[:cookies]
     }
+  end
+
+  # So a header given as "Content-Type" isn't sent twice, and the stream's
+  # headers read like the envelope's.
+  defp downcase_headers(headers) do
+    Map.new(headers, fn {name, value} -> {name |> to_string() |> String.downcase(), value} end)
   end
 
   # Once the first chunk is sent the response is committed: the error can
@@ -421,50 +484,50 @@ defmodule AWS.Lambda.Runtime do
 
   # Replying
 
-  defp reply({:streamed, posted}, _context, _input) do
+  defp reply({:streamed, posted}, _context, _input, _http) do
     posted
   end
 
-  defp reply({:returned, {:ok, body}}, context, input) do
-    respond(context, input, body, [])
+  defp reply({:returned, {:ok, body}}, context, input, http) do
+    respond(context, input, body, [], http)
   end
 
-  defp reply({:returned, {:ok, body, opts}}, context, input) when is_list(opts) do
-    respond(context, input, body, opts)
+  defp reply({:returned, {:ok, body, opts}}, context, input, http) when is_list(opts) do
+    respond(context, input, body, opts, http)
   end
 
   # Only the failed records of a batch are retried.
-  defp reply({:returned, {:retry, failed}}, context, input) do
+  defp reply({:returned, {:retry, failed}}, context, input, http) do
     case Events.batch_item_failures(failed) do
       {:ok, response} ->
         Logger.info("retrying #{length(response["batchItemFailures"])} record(s) of the batch")
-        respond(context, input, response, [])
+        respond(context, input, response, [], http)
 
       {:error, message} ->
         report(context, "Runtime.InvalidResponse", message, [])
     end
   end
 
-  defp reply({:returned, {:error, reason}}, context, _input) do
+  defp reply({:returned, {:error, reason}}, context, _input, _http) do
     Logger.error("handler returned an error: #{inspect(reason)}")
     report(context, "Handler.Error", describe(reason), [])
   end
 
-  defp reply({:returned, body}, context, input) do
-    respond(context, input, body, [])
+  defp reply({:returned, body}, context, input, http) do
+    respond(context, input, body, [], http)
   end
 
   # A route nobody handles, as a router would answer it.
-  defp reply({:unmatched, {module, function, arity}}, context, %Request{} = request) do
+  defp reply({:unmatched, {module, function, arity}}, context, %Request{} = request, http) do
     Logger.warning(
       "no clause of #{Exception.format_mfa(module, function, arity)} matches " <>
         "#{request.method} #{request.path}, answering 404"
     )
 
-    respond(context, request, %{"message" => "Not Found"}, status: 404)
+    respond(context, request, %{"message" => "Not Found"}, [status: 404], http)
   end
 
-  defp reply({:unmatched, {module, function, arity}}, context, event) do
+  defp reply({:unmatched, {module, function, arity}}, context, event, _http) do
     mfa = Exception.format_mfa(module, function, arity)
 
     Logger.error(
@@ -475,14 +538,14 @@ defmodule AWS.Lambda.Runtime do
     report(context, "Runtime.UnhandledEvent", "no clause of #{mfa} matches the event", [])
   end
 
-  defp reply({:failed, kind, reason, stacktrace}, context, _input) do
+  defp reply({:failed, kind, reason, stacktrace}, context, _input, _http) do
     Logger.error(Exception.format(kind, reason, stacktrace))
 
     {type, message} = failure(kind, reason, stacktrace)
     report(context, type, message, stacktrace)
   end
 
-  defp reply({:timed_out, timeout}, context, _input) do
+  defp reply({:timed_out, timeout}, context, _input, _http) do
     Logger.error("handler did not return within #{timeout}ms")
 
     report(
@@ -493,7 +556,25 @@ defmodule AWS.Lambda.Runtime do
     )
   end
 
-  defp respond(context, input, body, opts) do
+  # A Function URL in RESPONSE_STREAM mode only reads a stream: the body is
+  # its single chunk, after the prelude.
+  defp respond(context, _request, body, opts, :stream) do
+    with {:ok, opts} <- validate_response_options(opts),
+         {:ok, content, content_type} <- http_body(body, opts[:content_type]) do
+      stream(context, [content],
+        content_type: content_type,
+        http: Keyword.take(opts, @http_options)
+      )
+    else
+      {:error, :options, message} ->
+        report(context, "Runtime.InvalidResponse", message, [])
+
+      {:error, message} ->
+        report(context, "Runtime.UnserializableResult", message, [])
+    end
+  end
+
+  defp respond(context, input, body, opts, _http) do
     with {:ok, opts} <- validate_response_options(opts),
          {:ok, payload} <- encode_response(input, body, opts) do
       {"response", API.invocation_response(context.request_id, payload)}
@@ -526,7 +607,7 @@ defmodule AWS.Lambda.Runtime do
       headers =
         opts
         |> Keyword.get(:headers, %{})
-        |> Map.new(fn {name, value} -> {name |> to_string() |> String.downcase(), value} end)
+        |> downcase_headers()
         |> Map.put_new("content-type", content_type)
 
       %{
