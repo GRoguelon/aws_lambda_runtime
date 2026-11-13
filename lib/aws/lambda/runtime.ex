@@ -35,6 +35,7 @@ defmodule AWS.Lambda.Runtime do
   alias AWS.Lambda.Runtime.Handler
   alias AWS.Lambda.Runtime.Request
   alias AWS.Lambda.Runtime.Shutdown
+  alias AWS.Lambda.Runtime.Telemetry
 
   ## Module attributes
 
@@ -80,7 +81,17 @@ defmodule AWS.Lambda.Runtime do
         :ok = API.setup()
         function_url = function_url_mode!()
         {module, _function, _arity} = handler = Handler.resolve!()
-        %{handler: handler, state: init_handler(module), function_url: function_url}
+
+        start = System.monotonic_time()
+        state = init_handler(module)
+
+        Telemetry.execute(
+          [:aws_lambda_runtime, :init, :stop],
+          %{duration: System.monotonic_time() - start},
+          %{handler: handler}
+        )
+
+        %{handler: handler, state: state, function_url: function_url, cold_start: true}
       catch
         kind, reason ->
           fail_init(kind, reason, __STACKTRACE__, halt)
@@ -235,7 +246,7 @@ defmodule AWS.Lambda.Runtime do
         |> process(context, raw_event)
         |> posted(halt)
 
-        loop(setup, halt, 0)
+        loop(%{setup | cold_start: false}, halt, 0)
 
       {:error, {:unexpected_status, status, body}} ->
         # The Runtime API answered: retrying won't change its mind.
@@ -280,9 +291,19 @@ defmodule AWS.Lambda.Runtime do
             args = if arity == 3, do: [input, context, setup.state], else: [input, context]
             http = http_reply(input, setup.function_url)
 
-            context
-            |> invoke(module, function, args, input, http)
-            |> reply(context, input, http)
+            metadata = %{
+              request_id: context.request_id,
+              context: context,
+              handler: setup.handler,
+              event_type: event_type(input),
+              cold_start: setup.cold_start
+            }
+
+            start = invocation_started(metadata)
+            result = invoke(context, module, function, args, input, http)
+            invocation_done(result, start, metadata)
+
+            reply(result, context, input, http)
 
           {:error, message, request} ->
             Logger.info("bad request, not calling the handler: #{message}")
@@ -305,6 +326,57 @@ defmodule AWS.Lambda.Runtime do
   end
 
   # Dispatch
+
+  # Telemetry
+
+  defp invocation_started(metadata) do
+    start = System.monotonic_time()
+
+    Telemetry.execute(
+      [:aws_lambda_runtime, :invocation, :start],
+      %{system_time: System.system_time(), monotonic_time: start},
+      metadata
+    )
+
+    start
+  end
+
+  defp invocation_done(result, start, metadata) do
+    stop = System.monotonic_time()
+    measurements = %{duration: stop - start, monotonic_time: stop}
+
+    case result do
+      {:failed, kind, reason, stacktrace} ->
+        Telemetry.execute(
+          [:aws_lambda_runtime, :invocation, :exception],
+          measurements,
+          Map.merge(metadata, %{kind: kind, reason: reason, stacktrace: stacktrace})
+        )
+
+      result ->
+        Telemetry.execute(
+          [:aws_lambda_runtime, :invocation, :stop],
+          measurements,
+          Map.put(metadata, :result, result_type(result))
+        )
+    end
+  end
+
+  defp result_type({:streamed, _posted}), do: :stream
+  defp result_type({:returned, {:error, _reason}}), do: :error
+  defp result_type({:returned, {:retry, _failed}}), do: :retry
+  defp result_type({:returned, _result}), do: :ok
+  defp result_type({:unmatched, _mfa}), do: :unmatched
+  defp result_type({:timed_out, _timeout}), do: :timeout
+
+  defp event_type(%Request{}), do: :request
+  defp event_type(%Events.SQS{}), do: :sqs
+  defp event_type(%Events.SNS{}), do: :sns
+  defp event_type(%Events.S3{}), do: :s3
+  defp event_type(%Events.EventBridge{}), do: :event_bridge
+  defp event_type(%Events.Kinesis{}), do: :kinesis
+  defp event_type(%Events.DynamoDB{}), do: :dynamodb
+  defp event_type(_event), do: :event
 
   # handle/3 gets an HTTP request or a service's event decoded, handler/2 the
   # event as it is.

@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expects it, and `:content_type` returns a binary body as is. Streams take
   the same HTTP options, which `http:` still sets too. Header names are sent
   lowercased, a stream's included.
+- `AWS.Lambda.Runtime.Metrics` publishes CloudWatch metrics through the
+  Embedded Metric Format, a line of JSON on the function's output, with
+  `emit/3`, `count/4` and `timing/4`.
+- When the function depends on `:telemetry`, the runtime emits
+  `[:aws_lambda_runtime, :invocation, :start | :stop | :exception]` around
+  each call to the handler, with its event type, cold start and result, and
+  `[:aws_lambda_runtime, :init, :stop]` once `init/1` has run
+  (`AWS.Lambda.Runtime.Telemetry`).
 - Graceful shutdown: functions registered with
   `AWS.Lambda.Runtime.Shutdown.register/1` run when Lambda shuts the
   execution environment down, before the VM stops its applications. The

@@ -628,6 +628,91 @@ defmodule AWS.Lambda.RuntimeTest do
     end
 
     @tag :capture_log
+    test "emits :telemetry events for init/1 and each invocation" do
+      events = [
+        [:aws_lambda_runtime, :init, :stop],
+        [:aws_lambda_runtime, :invocation, :start],
+        [:aws_lambda_runtime, :invocation, :stop],
+        [:aws_lambda_runtime, :invocation, :exception]
+      ]
+
+      test_pid = self()
+
+      handler = fn event, measurements, metadata, _config ->
+        send(test_pid, {:event, event, measurements, metadata})
+      end
+
+      :telemetry.attach_many("runtime-test", events, handler, nil)
+      on_exit(fn -> :telemetry.detach("runtime-test") end)
+
+      invoke(%{"Records" => [%{"eventSource" => "aws:sqs", "messageId" => "m1", "body" => "ok"}]})
+
+      assert_received {:event, [:aws_lambda_runtime, :init, :stop], %{duration: _},
+                       %{handler: {StatefulHandler, :handle, 3}}}
+
+      assert_received {:event, [:aws_lambda_runtime, :invocation, :start],
+                       %{system_time: _, monotonic_time: _}, start}
+
+      assert %{request_id: "req-h", event_type: :sqs, cold_start: true} = start
+
+      assert_received {:event, [:aws_lambda_runtime, :invocation, :stop], %{duration: duration},
+                       %{result: :retry, event_type: :sqs}}
+
+      assert duration >= 0
+
+      invoke(http("GET", "/nested"))
+
+      assert_received {:event, [:aws_lambda_runtime, :invocation, :exception], %{duration: _},
+                       %{kind: :error, reason: :function_clause, event_type: :request}}
+    end
+
+    @tag :capture_log
+    test "marks only the environment's first invocation as a cold start" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "cold-start-test",
+        [:aws_lambda_runtime, :invocation, :start],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:cold_start, metadata.cold_start})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("cold-start-test") end)
+
+      dispatch = fn
+        {"POST", "/2020-01-01/extension/register", _headers, _body} ->
+          {200, %{"lambda-extension-identifier" => "ext"}, "{}"}
+
+        {"GET", "/2020-01-01/extension/event/next", _headers, _body} ->
+          {500, %{}, "stop waiting"}
+
+        {"GET", _path, _headers, _body} ->
+          {200, %{"lambda-runtime-aws-request-id" => "req-c"}, ~s({"name":"Ada"})}
+
+        {"POST", _path, _headers, _body} ->
+          send(test_pid, :posted)
+          {202, %{}, ""}
+      end
+
+      {_pid, endpoint} = FakeRuntimeAPI.start(List.duplicate(dispatch, 6))
+
+      System.put_env("AWS_LAMBDA_RUNTIME_API", endpoint)
+      :persistent_term.erase({API, :endpoint})
+
+      runtime_pid = start_runtime!(halt: halt_fun())
+
+      assert_receive :posted, 1_000
+      assert_receive :posted, 1_000
+
+      stop_runtime(runtime_pid)
+
+      assert_received {:cold_start, true}
+      assert_received {:cold_start, false}
+    end
+
+    @tag :capture_log
     test "registers terminate/2 as a shutdown function, with the state" do
       invoke(%{"name" => "Ada"})
 
