@@ -197,12 +197,20 @@ Lambda only streams to callers that ask for it: a Function URL in
 ```sh
 aws lambda create-function-url-config --function-name elixir-hello \
   --auth-type NONE --invoke-mode RESPONSE_STREAM
+aws lambda add-permission --function-name elixir-hello \
+  --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
+  --principal "*" --function-url-auth-type NONE
+aws lambda add-permission --function-name elixir-hello \
+  --statement-id FunctionURLInvokeFunction --action lambda:InvokeFunction \
+  --principal "*" --invoked-via-function-url
 curl -N https://<url-id>.lambda-url.<region>.on.aws/
 ```
 
-(`NONE` makes the URL public, and also needs a resource-based policy
-allowing it to be invoked; see the Lambda documentation on Function URLs), or
-the `InvokeWithResponseStream` API:
+(`NONE` makes the URL public: anyone with it can invoke the function. A
+public URL needs both permissions; `--invoked-via-function-url` limits the
+second one to calls made through the URL. See the Lambda documentation on
+Function URLs for `AWS_IAM` authentication.), or the `InvokeWithResponseStream`
+API:
 
 ```sh
 aws lambda invoke-with-response-stream --function-name elixir-hello \
